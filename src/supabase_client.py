@@ -168,8 +168,8 @@ class SupabaseClient:
             Grupo criado ou None em caso de erro
         """
         try:
-            # Extrair número da instância do token ou URL
-            instance_number = "553391269004"  # Número conectado na UAZAPI
+            # Instance name = número admin do WhatsApp configurado no .env
+            instance_number = settings.whatsapp_admin_number
             
             # Calcular ordem sequencial (próximo número disponível)
             count_response = self.client.table(self.table_name).select("id", count="exact").execute()
