@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Script para criar o primeiro grupo "Dona Promo #001"
+Script para criar o primeiro grupo "Caramelo Ofertas #001"
 """
 import sys
 from pathlib import Path
@@ -13,7 +13,7 @@ from src.monitor import setup_logging
 
 
 def main():
-    """Cria o grupo Dona Promo #001"""
+    """Cria o grupo Caramelo Ofertas #001"""
     
     # Configura logging
     setup_logging()
@@ -26,12 +26,12 @@ def main():
     load_balancer = LoadBalancer()
     
     # Cria o grupo com nome customizado
-    print("🔧 Criando grupo 'Dona Promo #001'...")
+    print("🔧 Criando grupo 'Caramelo Ofertas #001'...")
     print("⏳ Aguarde, isso pode levar alguns segundos...\n")
     
     new_group = load_balancer.create_new_group(
         group_number=1,
-        group_name="Dona Promo #001"
+        group_name="Caramelo Ofertas #001"
     )
     
     if new_group:

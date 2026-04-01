@@ -53,7 +53,7 @@ class GroupMonitor:
 
                 new_group = self.load_balancer.create_new_group(
                     group_number=1,
-                    group_name="Dona Promo #001"
+                    group_name="Caramelo Ofertas #001"
                 )
                 if new_group:
                     new_group_created = True
@@ -92,18 +92,18 @@ class GroupMonitor:
                 )
 
                 # Extrai o número do grupo atual para criar o próximo
-                # Ex: "Dona Promo #001" -> 2 (próximo)
+                # Ex: "Caramelo Ofertas #001" -> 2 (próximo)
                 import re
                 match = re.search(r'#(\d+)', newest_group.name)
                 if match:
                     current_number = int(match.group(1))
                     next_number = current_number + 1
-                    next_group_name = f"Dona Promo #{next_number:03d}"
+                    next_group_name = f"Caramelo Ofertas #{next_number:03d}"
                 else:
                     # Se não tiver padrão, usa contador simples
                     active_groups = self.load_balancer.db.get_active_groups()
                     next_number = len(active_groups) + 1
-                    next_group_name = f"Dona Promo #{next_number:03d}"
+                    next_group_name = f"Caramelo Ofertas #{next_number:03d}"
 
                 new_group = self.load_balancer.create_new_group(
                     group_number=next_number,
