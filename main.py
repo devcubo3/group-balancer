@@ -23,7 +23,7 @@ def main():
 
     parser.add_argument(
         "command",
-        choices=["monitor", "sync", "create-group", "get-best-group", "test"],
+        choices=["monitor", "sync", "create-group", "get-best-group", "list-groups", "test"],
         help="Comando a ser executado"
     )
 
@@ -39,6 +39,12 @@ def main():
         help="Número do grupo a ser criado (usado com create-group)"
     )
 
+    parser.add_argument(
+        "--nicho",
+        type=str,
+        help="Slug do nicho (ex: bebes, geral). Sem isso, opera em todos os nichos."
+    )
+
     args = parser.parse_args()
 
     # Configura logging
@@ -47,6 +53,15 @@ def main():
     # Inicializa componentes
     monitor = GroupMonitor()
     load_balancer = LoadBalancer()
+
+    # Resolve o nicho, se informado
+    nicho = None
+    if args.nicho:
+        nicho = load_balancer.resolve_nicho(args.nicho)
+        if not nicho:
+            print(f"\n✗ Nicho '{args.nicho}' não encontrado ou inativo\n")
+            sys.exit(1)
+        print(f"\n🏷️  Nicho: {nicho.nome} ({nicho.slug})")
 
     try:
         if args.command == "monitor":
@@ -74,9 +89,7 @@ def main():
 
             if group_name:
                 print(f"   Nome customizado: {group_name}")
-                new_group = load_balancer.create_new_group(group_number, group_name)
-            else:
-                new_group = load_balancer.create_new_group(group_number)
+            new_group = load_balancer.create_new_group(group_number, group_name, nicho)
 
             if new_group:
                 print(f"\n✅ Grupo criado com sucesso!")
@@ -91,7 +104,7 @@ def main():
             # Testa o algoritmo de load balancer
             print("\n🎯 Buscando melhor grupo para novo lead...")
 
-            result = load_balancer.get_best_group_for_lead()
+            result = load_balancer.get_best_group_for_lead(nicho.id if nicho else None)
 
             if result.group:
                 print(f"\n✅ Grupo encontrado!")
@@ -104,15 +117,55 @@ def main():
                 print(f"   Motivo: {result.reason}")
                 print(f"   Criar novo grupo: {result.should_create_new}\n")
 
+        elif args.command == "list-groups":
+            # Lista todos os grupos em que a instância do WhatsApp está.
+            # É assim que se descobre o JID de um grupo-fonte recém-entrado,
+            # para cadastrá-lo na tabela `fontes` apontando para um nicho.
+            print("\n📋 Listando grupos da instância...\n")
+
+            grupos = load_balancer.whatsapp.list_groups(force=True, no_participants=True)
+
+            if not grupos:
+                print("⚠ Nenhum grupo retornado. Verifique WHATSAPP_API_URL e WHATSAPP_API_TOKEN.\n")
+                sys.exit(1)
+
+            # JIDs já cadastrados, para saber o que falta registrar
+            cadastrados = set()
+            try:
+                resp = load_balancer.db.client.table("fontes").select("chat_id").execute()
+                cadastrados = {f["chat_id"] for f in (resp.data or [])}
+            except Exception as e:
+                print(f"(não foi possível ler `fontes`: {e})\n")
+
+            print(f"{'JID':36} {'MEMBROS':>8}  {'FONTE?':8} NOME")
+            print("-" * 100)
+            for g in grupos:
+                jid = g.get("JID") or g.get("jid") or g.get("id") or "?"
+                nome = g.get("Name") or g.get("subject") or g.get("name") or "(sem nome)"
+                membros = g.get("ParticipantCount") or len(g.get("Participants") or [])
+                marca = "✓" if jid in cadastrados else "—"
+                print(f"{jid:36} {membros:>8}  {marca:8} {nome}")
+
+            print(f"\nTotal: {len(grupos)} grupo(s)\n")
+            print("Para cadastrar um grupo como fonte de um nicho:")
+            print("  INSERT INTO fontes (nicho_id, plataforma, chat_id, chat_title)")
+            print("  VALUES ((SELECT id FROM nichos WHERE slug='bebes'),")
+            print("          'whatsapp', '<JID>', '<nome do grupo>');\n")
+
         elif args.command == "test":
             # Testa conexões
             print("\n🧪 Testando conexões...\n")
 
             # Testa Supabase
             print("1️⃣ Testando conexão com Supabase...")
+            groups = []
             try:
-                groups = load_balancer.db.get_active_groups()
-                print(f"   ✅ Conexão OK - {len(groups)} grupos encontrados")
+                nichos = load_balancer.db.get_active_nichos()
+                print(f"   ✅ Conexão OK - {len(nichos)} nicho(s) ativo(s)")
+                for n in nichos:
+                    n_groups = load_balancer.db.get_active_groups(n.id)
+                    print(f"      • {n.nome} ({n.slug}): {len(n_groups)} grupo(s)")
+                    groups.extend(n_groups)
             except Exception as e:
                 print(f"   ✗ Erro: {e}")
 

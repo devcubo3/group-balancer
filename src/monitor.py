@@ -30,7 +30,30 @@ class GroupMonitor:
 
     def check_newest_group(self):
         """
-        Verifica o grupo mais recente e cria novo se necessário.
+        Verifica o grupo mais recente de CADA nicho e cria novo se necessário.
+
+        Cada nicho tem sua própria cadeia de overflow, então o scale-out é
+        avaliado nicho a nicho — um processo só atende todos eles, para que um
+        nicho novo seja uma linha em tabela e não um deploy novo.
+        """
+        logger.info("=" * 60)
+        logger.info(f"🔍 VERIFICAÇÃO AUTOMÁTICA - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("=" * 60)
+
+        nichos = self.load_balancer.db.get_active_nichos()
+        if not nichos:
+            logger.warning("⚠ Nenhum nicho ativo cadastrado — nada a monitorar")
+            return
+
+        for nicho in nichos:
+            try:
+                self._check_nicho(nicho)
+            except Exception as e:
+                logger.error(f"✗ Erro ao verificar nicho {nicho.slug}: {e}", exc_info=True)
+
+    def _check_nicho(self, nicho):
+        """
+        Verifica a cadeia de grupos de um nicho e faz scale-out se necessário.
         Salva log da verificação no banco de dados.
         """
         newest_group = None
@@ -41,19 +64,18 @@ class GroupMonitor:
         error_msg = None
 
         try:
-            logger.info("=" * 60)
-            logger.info(f"🔍 VERIFICAÇÃO AUTOMÁTICA - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            logger.info("=" * 60)
+            logger.info(f"🏷️  Nicho: {nicho.nome} ({nicho.slug})")
 
-            # Busca o grupo mais novo
-            newest_group = self.load_balancer.db.get_newest_group()
+            # Busca o grupo mais novo DO NICHO
+            newest_group = self.load_balancer.db.get_newest_group(nicho.id)
 
             if not newest_group:
-                logger.warning("⚠ Nenhum grupo encontrado! Criando o primeiro grupo...")
+                logger.warning(f"⚠ Nicho {nicho.slug} sem grupo! Criando o primeiro...")
 
                 new_group = self.load_balancer.create_new_group(
                     group_number=1,
-                    group_name="Caramelo Ofertas #001"
+                    group_name=f"{nicho.prefixo_grupo()} #001",
+                    nicho=nicho
                 )
                 if new_group:
                     new_group_created = True
@@ -62,7 +84,7 @@ class GroupMonitor:
                     # Salva log da criação do primeiro grupo
                     log = MonitorLog(
                         monitor_type="newest_group",
-                        status_message="Primeiro grupo criado (nenhum grupo existia)",
+                        status_message=f"Primeiro grupo do nicho {nicho.slug} criado",
                         new_group_created=True,
                         new_group_id_api=new_group_id,
                         has_error=False
@@ -78,36 +100,35 @@ class GroupMonitor:
             self.load_balancer.sync_group_members(newest_group)
 
             # Busca novamente após sincronização
-            newest_group = self.load_balancer.db.get_newest_group()
-            current_count = newest_group.member_count if newest_group else 0
-            count_diff = current_count - previous_count if previous_count is not None else 0
+            newest_group = self.load_balancer.db.get_newest_group(nicho.id)
 
             # Verifica se precisa criar novo grupo
             if newest_group and self.load_balancer.should_scale_out(newest_group):
                 logger.warning(
                     f"🚨 SCALE-OUT NECESSÁRIO!\n"
+                    f"   Nicho: {nicho.nome}\n"
                     f"   Grupo atual: {newest_group.name}\n"
                     f"   Membros: {newest_group.member_count}\n"
                     f"   Threshold: {settings.scale_out_threshold}"
                 )
 
                 # Extrai o número do grupo atual para criar o próximo
-                # Ex: "Caramelo Ofertas #001" -> 2 (próximo)
+                # Ex: "Bebês e Crianças #001" -> 2 (próximo)
                 import re
-                match = re.search(r'#(\d+)', newest_group.name)
+                match = re.search(r'#(\d+)', newest_group.name or "")
                 if match:
-                    current_number = int(match.group(1))
-                    next_number = current_number + 1
-                    next_group_name = f"Caramelo Ofertas #{next_number:03d}"
+                    next_number = int(match.group(1)) + 1
                 else:
-                    # Se não tiver padrão, usa contador simples
-                    active_groups = self.load_balancer.db.get_active_groups()
+                    # Sem o padrão no nome, conta os grupos do nicho
+                    active_groups = self.load_balancer.db.get_active_groups(nicho.id)
                     next_number = len(active_groups) + 1
-                    next_group_name = f"Caramelo Ofertas #{next_number:03d}"
+
+                next_group_name = f"{nicho.prefixo_grupo()} #{next_number:03d}"
 
                 new_group = self.load_balancer.create_new_group(
                     group_number=next_number,
-                    group_name=next_group_name
+                    group_name=next_group_name,
+                    nicho=nicho
                 )
 
                 if new_group:

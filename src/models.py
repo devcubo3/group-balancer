@@ -6,6 +6,25 @@ from typing import Optional, List, Any, Dict
 from pydantic import BaseModel
 
 
+class Nicho(BaseModel):
+    """Nicho atendido por uma cadeia de grupos"""
+
+    id: str
+    nome: str
+    slug: str
+    is_active: bool = True
+
+    # Identidade dos grupos WhatsApp deste nicho. Ficam no banco (e não em env
+    # var) para que cada nicho tenha cara própria e mudá-la não exija deploy.
+    nome_grupo: Optional[str] = None       # prefixo, ex: "Caramelo Bebê"
+    descricao_grupo: Optional[str] = None
+    imagem_url: Optional[str] = None
+
+    def prefixo_grupo(self) -> str:
+        """Nome base dos grupos deste nicho, ex: 'Caramelo Bebê' → 'Caramelo Bebê #001'."""
+        return self.nome_grupo or self.nome
+
+
 class WhatsAppGroup(BaseModel):
     """Modelo de um grupo de WhatsApp"""
 
@@ -15,7 +34,11 @@ class WhatsAppGroup(BaseModel):
     invite_link: str
     member_count: int
     is_active: bool = True
-    
+
+    # Nicho que este grupo atende. A cadeia de overflow (ordem_sequencial) é
+    # por nicho: cada nicho tem sua própria sequência de grupos.
+    nicho_id: Optional[str] = None
+
     # Campos adicionais da API UAZAPI
     subject: Optional[str] = None  # Nome/assunto do grupo
     description: Optional[str] = None  # Descrição do grupo (Desc)

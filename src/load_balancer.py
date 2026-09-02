@@ -7,7 +7,7 @@ from typing import Optional
 from .config import settings
 from .supabase_client import SupabaseClient
 from .whatsapp_service import WhatsAppService
-from .models import WhatsAppGroup, LoadBalancerResult
+from .models import WhatsAppGroup, LoadBalancerResult, Nicho
 
 logger = logging.getLogger(__name__)
 
@@ -23,22 +23,33 @@ class LoadBalancer:
         self.max_redirect = settings.max_members_for_redirect
         self.scale_threshold = settings.scale_out_threshold
 
-    def get_best_group_for_lead(self) -> LoadBalancerResult:
+    def resolve_nicho(self, slug: str) -> Optional[Nicho]:
+        """Busca um nicho ativo pelo slug (ex: 'bebes')."""
+        for nicho in self.db.get_active_nichos():
+            if nicho.slug == slug:
+                return nicho
+        logger.error(f"✗ Nicho '{slug}' não encontrado ou inativo")
+        return None
+
+    def get_best_group_for_lead(self, nicho_id: Optional[str] = None) -> LoadBalancerResult:
         """
         Algoritmo principal: Retorna o melhor grupo para receber um novo lead.
 
         Regras:
-        1. Busca o grupo com MENOR número de membros
+        1. Busca o grupo com MENOR número de membros DENTRO DO NICHO
         2. Esse grupo deve ter MENOS de 900 membros (max_redirect)
         3. Se não houver grupo disponível, sinaliza necessidade de criar novo
+
+        Args:
+            nicho_id: nicho do lead. None considera todos os grupos.
 
         Returns:
             LoadBalancerResult com o grupo ideal ou indicação de criar novo
         """
-        logger.info("🎯 Buscando melhor grupo para novo lead...")
+        logger.info(f"🎯 Buscando melhor grupo para novo lead (nicho={nicho_id})...")
 
-        # Busca o grupo com menor member_count que esteja abaixo do limite
-        best_group = self.db.get_best_group_for_redirect(self.max_redirect)
+        # Busca o grupo com menos membros que esteja abaixo do limite
+        best_group = self.db.get_best_group_for_redirect(self.max_redirect, nicho_id)
 
         if best_group:
             logger.info(
@@ -82,34 +93,44 @@ class LoadBalancer:
 
         return False
 
-    def create_new_group(self, group_number: Optional[int] = None, group_name: Optional[str] = None) -> Optional[WhatsAppGroup]:
+    def create_new_group(
+        self,
+        group_number: Optional[int] = None,
+        group_name: Optional[str] = None,
+        nicho: Optional[Nicho] = None,
+    ) -> Optional[WhatsAppGroup]:
         """
         Cria um novo grupo via API e registra no banco de dados.
 
         Args:
-            group_number: Número do grupo (ex: 101). Se None, calcula automaticamente.
-            group_name: Nome do grupo customizado. Se None, usa padrão "Grupo {number}"
+            group_number: Número do grupo na cadeia do nicho. Se None, calcula.
+            group_name: Nome customizado. Se None, usa "{nome do nicho} #NNN".
+            nicho: Nicho que o grupo vai atender. None cai no nicho Geral.
 
         Returns:
             Grupo criado ou None em caso de erro
         """
-        # Determina o número do próximo grupo se não fornecido
+        nicho_id = nicho.id if nicho else None
+
+        # Numeração é por nicho, não global
         if group_number is None:
-            active_groups = self.db.get_active_groups()
+            active_groups = self.db.get_active_groups(nicho_id)
             group_number = len(active_groups) + 1
 
-        # Usa nome customizado ou padrão
+        # Nome padrão carrega a identidade do nicho, para os grupos serem
+        # distinguíveis na lista do WhatsApp: "Caramelo Bebê #002", não "Grupo 2"
         if not group_name:
-            group_name = f"Grupo {group_number}"
+            prefixo = nicho.prefixo_grupo() if nicho else "Caramelo Ofertas"
+            group_name = f"{prefixo} #{group_number:03d}"
+
+        # Descrição e foto vêm do nicho; as env vars são só fallback para nicho
+        # que ainda não configurou a própria identidade.
+        descricao = (nicho.descricao_grupo if nicho else None) or settings.group_description
+        imagem = (nicho.imagem_url if nicho else None) or settings.group_image_url
 
         logger.info(f"🔧 Criando novo grupo: {group_name}")
 
-        # Cria o grupo via API do WhatsApp com descrição e imagem das envs
-        api_response = self.whatsapp.create_group(
-            group_name, 
-            settings.group_description,
-            settings.group_image_url
-        )
+        api_response = self.whatsapp.create_group(group_name, descricao, imagem)
 
         if not api_response:
             logger.error(f"✗ Falha ao criar grupo via API: {group_name}")
@@ -158,11 +179,12 @@ class LoadBalancer:
             owner_jid=owner_jid,
             created_timestamp=None,  # Converter depois se necessário
             is_announcement=is_announcement,
-            is_locked=is_locked
+            is_locked=is_locked,
+            nicho_id=nicho_id
         )
 
         # Salva no banco de dados
-        created_group = self.db.create_group(new_group)
+        created_group = self.db.create_group(new_group, nicho_id)
 
         # Salva logs da API
         self._save_api_logs()

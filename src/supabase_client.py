@@ -9,9 +9,39 @@ from supabase import create_client, Client
 from postgrest.exceptions import APIError
 
 from .config import settings
-from .models import WhatsAppGroup, MonitorLog, ApiCallLog
+from .models import WhatsAppGroup, MonitorLog, ApiCallLog, Nicho
 
 logger = logging.getLogger(__name__)
+
+
+def _map_group(db_data: dict) -> WhatsAppGroup:
+    """
+    Traduz uma linha de `controle_grupos` para o modelo WhatsAppGroup.
+
+    O banco usa nomes em português (group_jid, subject, membros_atuais, status)
+    e o modelo usa os nomes da API UAZAPI — esta é a única ponte entre os dois.
+    """
+    return WhatsAppGroup(
+        group_id_api=db_data.get("group_jid"),
+        name=db_data.get("subject") or "",
+        invite_link=db_data.get("link_convite") or "",
+        member_count=db_data.get("membros_atuais", 0),
+        is_active=db_data.get("status") == "ativo",
+        nicho_id=db_data.get("nicho_id"),
+        created_at=db_data.get("created_at"),
+        updated_at=db_data.get("created_at"),
+        subject=db_data.get("subject"),
+        description=db_data.get("description"),
+        owner_jid=db_data.get("owner_jid"),
+        created_timestamp=db_data.get("created_timestamp"),
+        participant_version_id=db_data.get("participant_version_id"),
+        is_announcement=db_data.get("is_announcement"),
+        is_locked=db_data.get("is_locked"),
+        is_parent=db_data.get("is_parent"),
+        default_membership_approval_mode=db_data.get("default_membership_approval_mode"),
+        is_incognito=db_data.get("is_incognito"),
+        linked_parent_jid=db_data.get("linked_parent_jid"),
+    )
 
 
 class SupabaseClient:
@@ -24,46 +54,49 @@ class SupabaseClient:
         )
         self.table_name = "controle_grupos"  # Nome real da tabela no Supabase
 
-    def get_active_groups(self) -> List[WhatsAppGroup]:
+    def get_active_nichos(self) -> List[Nicho]:
         """
-        Busca todos os grupos ativos ordenados por member_count (crescente).
+        Busca os nichos ativos. Um único processo gerencia todos eles, para que
+        um nicho novo seja uma linha em tabela e não um deploy novo.
+        """
+        try:
+            response = (
+                self.client.table("nichos")
+                .select("id, nome, slug, is_active, nome_grupo, descricao_grupo, imagem_url")
+                .eq("is_active", True)
+                .order("slug")
+                .execute()
+            )
+            nichos = [Nicho(**n) for n in response.data]
+            logger.info(f"✓ {len(nichos)} nicho(s) ativo(s)")
+            return nichos
+        except APIError as e:
+            logger.error(f"✗ Erro ao buscar nichos: {e}")
+            return []
+
+    def get_active_groups(self, nicho_id: Optional[str] = None) -> List[WhatsAppGroup]:
+        """
+        Busca os grupos ativos ordenados por membros_atuais (crescente).
+
+        Args:
+            nicho_id: restringe a um nicho. None devolve todos os nichos.
 
         Returns:
             Lista de grupos ativos
         """
         try:
-            response = (
+            query = (
                 self.client.table(self.table_name)
                 .select("*")
                 .eq("status", "ativo")
-                .order("membros_atuais", desc=False)
-                .execute()
             )
+            if nicho_id:
+                query = query.eq("nicho_id", nicho_id)
 
-            groups = []
-            for db_data in response.data:
-                mapped_data = {
-                    "group_id_api": db_data.get("group_jid"),
-                    "name": db_data.get("subject"),
-                    "invite_link": db_data.get("link_convite", ""),
-                    "member_count": db_data.get("membros_atuais", 0),
-                    "is_active": db_data.get("status") == "ativo",
-                    "created_at": db_data.get("created_at"),
-                    "updated_at": db_data.get("created_at"),
-                    "subject": db_data.get("subject"),
-                    "description": db_data.get("description"),
-                    "owner_jid": db_data.get("owner_jid"),
-                    "created_timestamp": db_data.get("created_timestamp"),
-                    "participant_version_id": db_data.get("participant_version_id"),
-                    "is_announcement": db_data.get("is_announcement"),
-                    "is_locked": db_data.get("is_locked"),
-                    "is_parent": db_data.get("is_parent"),
-                    "default_membership_approval_mode": db_data.get("default_membership_approval_mode"),
-                    "is_incognito": db_data.get("is_incognito"),
-                    "linked_parent_jid": db_data.get("linked_parent_jid"),
-                }
-                groups.append(WhatsAppGroup(**mapped_data))
-            
+            response = query.order("membros_atuais", desc=False).execute()
+
+            groups = [_map_group(db_data) for db_data in response.data]
+
             logger.info(f"✓ {len(groups)} grupos ativos encontrados no Supabase")
             return groups
 
@@ -71,46 +104,29 @@ class SupabaseClient:
             logger.error(f"✗ Erro ao buscar grupos ativos: {e}")
             return []
 
-    def get_newest_group(self) -> Optional[WhatsAppGroup]:
+    def get_newest_group(self, nicho_id: Optional[str] = None) -> Optional[WhatsAppGroup]:
         """
-        Busca o grupo mais recentemente criado (ativo).
+        Busca o grupo mais recentemente criado (ativo) de um nicho.
+
+        Args:
+            nicho_id: restringe a um nicho. None devolve o mais novo global.
 
         Returns:
             Grupo mais novo ou None
         """
         try:
-            response = (
+            query = (
                 self.client.table(self.table_name)
                 .select("*")
                 .eq("status", "ativo")
-                .order("created_at", desc=True)
-                .limit(1)
-                .execute()
             )
+            if nicho_id:
+                query = query.eq("nicho_id", nicho_id)
+
+            response = query.order("created_at", desc=True).limit(1).execute()
 
             if response.data:
-                db_data = response.data[0]
-                mapped_data = {
-                    "group_id_api": db_data.get("group_jid"),
-                    "name": db_data.get("subject"),
-                    "invite_link": db_data.get("link_convite"),
-                    "member_count": db_data.get("membros_atuais", 0),
-                    "is_active": db_data.get("status") == "ativo",
-                    "created_at": db_data.get("created_at"),
-                    "updated_at": db_data.get("created_at"),
-                    "subject": db_data.get("subject"),
-                    "description": db_data.get("description"),
-                    "owner_jid": db_data.get("owner_jid"),
-                    "created_timestamp": db_data.get("created_timestamp"),
-                    "participant_version_id": db_data.get("participant_version_id"),
-                    "is_announcement": db_data.get("is_announcement"),
-                    "is_locked": db_data.get("is_locked"),
-                    "is_parent": db_data.get("is_parent"),
-                    "default_membership_approval_mode": db_data.get("default_membership_approval_mode"),
-                    "is_incognito": db_data.get("is_incognito"),
-                    "linked_parent_jid": db_data.get("linked_parent_jid"),
-                }
-                group = WhatsAppGroup(**mapped_data)
+                group = _map_group(response.data[0])
                 logger.info(f"✓ Grupo mais novo: {group.name} ({group.member_count} membros)")
                 return group
 
@@ -121,29 +137,36 @@ class SupabaseClient:
             logger.error(f"✗ Erro ao buscar grupo mais novo: {e}")
             return None
 
-    def get_best_group_for_redirect(self, max_members: int) -> Optional[WhatsAppGroup]:
+    def get_best_group_for_redirect(
+        self, max_members: int, nicho_id: Optional[str] = None
+    ) -> Optional[WhatsAppGroup]:
         """
         Busca o grupo com menor número de membros que esteja abaixo do limite.
 
         Args:
             max_members: Limite máximo de membros para redirecionamento
+            nicho_id: restringe a um nicho. None considera todos.
 
         Returns:
             Melhor grupo para receber novo lead ou None
         """
         try:
-            response = (
+            # Antes filtrava por is_active/member_count, colunas de uma tabela
+            # que não existe neste banco — a função falhava em toda chamada.
+            # controle_grupos usa status/membros_atuais.
+            query = (
                 self.client.table(self.table_name)
                 .select("*")
-                .eq("is_active", True)
-                .lt("member_count", max_members)
-                .order("member_count", desc=False)
-                .limit(1)
-                .execute()
+                .eq("status", "ativo")
+                .lt("membros_atuais", max_members)
             )
+            if nicho_id:
+                query = query.eq("nicho_id", nicho_id)
+
+            response = query.order("membros_atuais", desc=False).limit(1).execute()
 
             if response.data:
-                group = WhatsAppGroup(**response.data[0])
+                group = _map_group(response.data[0])
                 logger.info(
                     f"✓ Melhor grupo para redirect: {group.name} "
                     f"({group.member_count}/{max_members} membros)"
@@ -157,12 +180,16 @@ class SupabaseClient:
             logger.error(f"✗ Erro ao buscar melhor grupo: {e}")
             return None
 
-    def create_group(self, group: WhatsAppGroup) -> Optional[WhatsAppGroup]:
+    def create_group(
+        self, group: WhatsAppGroup, nicho_id: Optional[str] = None
+    ) -> Optional[WhatsAppGroup]:
         """
         Cria um novo grupo no banco de dados.
 
         Args:
             group: Dados do grupo a ser criado
+            nicho_id: Nicho que o grupo atende. None deixa o banco aplicar o
+                DEFAULT (nicho Geral).
 
         Returns:
             Grupo criado ou None em caso de erro
@@ -170,11 +197,17 @@ class SupabaseClient:
         try:
             # Instance name = número admin do WhatsApp configurado no .env
             instance_number = settings.whatsapp_admin_number
-            
-            # Calcular ordem sequencial (próximo número disponível)
-            count_response = self.client.table(self.table_name).select("id", count="exact").execute()
+
+            nicho_id = nicho_id or group.nicho_id
+
+            # Ordem sequencial é POR NICHO: cada nicho tem sua própria cadeia de
+            # overflow, então "Bebês #1" e "Geral #1" coexistem.
+            count_query = self.client.table(self.table_name).select("id", count="exact")
+            if nicho_id:
+                count_query = count_query.eq("nicho_id", nicho_id)
+            count_response = count_query.execute()
             ordem_sequencial = (count_response.count or 0) + 1
-            
+
             data = {
                 "instance_name": instance_number,
                 "group_jid": group.group_id_api,
@@ -197,34 +230,19 @@ class SupabaseClient:
                 "linked_parent_jid": group.linked_parent_jid,
             }
 
+            # Só envia nicho_id se conhecido — omitir deixa o DEFAULT do banco
+            # (nicho Geral) agir.
+            if nicho_id:
+                data["nicho_id"] = nicho_id
+
             response = self.client.table(self.table_name).insert(data).execute()
 
             if response.data:
-                # Mapear os nomes de campos do Supabase para o modelo Pydantic
-                db_data = response.data[0]
-                mapped_data = {
-                    "group_id_api": db_data.get("group_jid"),
-                    "name": db_data.get("subject"),
-                    "invite_link": db_data.get("link_convite"),
-                    "member_count": db_data.get("membros_atuais", 0),
-                    "is_active": db_data.get("status") == "ativo",
-                    "created_at": db_data.get("created_at"),
-                    "updated_at": db_data.get("updated_at"),
-                    # Campos adicionais
-                    "subject": db_data.get("subject"),
-                    "description": db_data.get("description"),
-                    "owner_jid": db_data.get("owner_jid"),
-                    "created_timestamp": db_data.get("created_timestamp"),
-                    "participant_version_id": db_data.get("participant_version_id"),
-                    "is_announcement": db_data.get("is_announcement"),
-                    "is_locked": db_data.get("is_locked"),
-                    "is_parent": db_data.get("is_parent"),
-                    "default_membership_approval_mode": db_data.get("default_membership_approval_mode"),
-                    "is_incognito": db_data.get("is_incognito"),
-                    "linked_parent_jid": db_data.get("linked_parent_jid"),
-                }
-                created_group = WhatsAppGroup(**mapped_data)
-                logger.info(f"✓ Grupo criado no Supabase: {created_group.name}")
+                created_group = _map_group(response.data[0])
+                logger.info(
+                    f"✓ Grupo criado no Supabase: {created_group.name} "
+                    f"(nicho {nicho_id}, ordem {ordem_sequencial})"
+                )
                 return created_group
 
             logger.error("✗ Falha ao criar grupo: resposta vazia")
@@ -268,33 +286,34 @@ class SupabaseClient:
 
     def deactivate_group(self, group_id_api: str) -> bool:
         """
-        Marca um grupo como inativo.
+        Marca um grupo como arquivado.
 
         Args:
-            group_id_api: ID do grupo na API do WhatsApp
+            group_id_api: JID do grupo na API do WhatsApp
 
         Returns:
             True se desativado com sucesso, False caso contrário
         """
         try:
+            # Antes escrevia is_active e filtrava por group_id_api — nenhuma das
+            # duas colunas existe em controle_grupos, que usa status e group_jid.
+            # A tabela também não tem updated_at.
             response = (
                 self.client.table(self.table_name)
-                .update({
-                    "is_active": False,
-                    "updated_at": datetime.utcnow().isoformat()
-                })
-                .eq("group_id_api", group_id_api)
+                .update({"status": "arquivado"})
+                .eq("group_jid", group_id_api)
                 .execute()
             )
 
             if response.data:
-                logger.info(f"✓ Grupo desativado: {group_id_api}")
+                logger.info(f"✓ Grupo arquivado: {group_id_api}")
                 return True
 
+            logger.warning(f"⚠ Grupo não encontrado para arquivar: {group_id_api}")
             return False
 
         except APIError as e:
-            logger.error(f"✗ Erro ao desativar grupo: {e}")
+            logger.error(f"✗ Erro ao arquivar grupo: {e}")
             return False
 
     def get_group_by_api_id(self, group_id_api: str) -> Optional[WhatsAppGroup]:
@@ -317,28 +336,7 @@ class SupabaseClient:
             )
 
             if response.data:
-                db_data = response.data[0]
-                mapped_data = {
-                    "group_id_api": db_data.get("group_jid"),
-                    "name": db_data.get("subject"),
-                    "invite_link": db_data.get("link_convite", ""),
-                    "member_count": db_data.get("membros_atuais", 0),
-                    "is_active": db_data.get("status") == "ativo",
-                    "created_at": db_data.get("created_at"),
-                    "updated_at": db_data.get("created_at"),
-                    "subject": db_data.get("subject"),
-                    "description": db_data.get("description"),
-                    "owner_jid": db_data.get("owner_jid"),
-                    "created_timestamp": db_data.get("created_timestamp"),
-                    "participant_version_id": db_data.get("participant_version_id"),
-                    "is_announcement": db_data.get("is_announcement"),
-                    "is_locked": db_data.get("is_locked"),
-                    "is_parent": db_data.get("is_parent"),
-                    "default_membership_approval_mode": db_data.get("default_membership_approval_mode"),
-                    "is_incognito": db_data.get("is_incognito"),
-                    "linked_parent_jid": db_data.get("linked_parent_jid"),
-                }
-                return WhatsAppGroup(**mapped_data)
+                return _map_group(response.data[0])
 
             return None
 

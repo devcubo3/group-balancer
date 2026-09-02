@@ -159,32 +159,76 @@ wait_rate_limit()               # Sleep de 2s entre chamadas
 | Limite WhatsApp | 1000 | `config.py:19` (documentação) |
 | Threshold Scale-Out | 950 | `config.py:18` + `load_balancer.py:42` |
 | Limite Redirect | 900 | `config.py:17` + `load_balancer.py:27` |
-| Algoritmo Distribuição | Menor member_count | `supabase_client.py:55` (ORDER BY) |
+| Algoritmo Distribuição | Menor `membros_atuais` dentro do nicho | `supabase_client.py` (`get_best_group_for_redirect`) |
 | Check Interval | 60s | `config.py:22` + `monitor.py:76` |
 | Daily Sync | 24h | `config.py:23` + `monitor.py:84` |
 | Rate Limit Delay | 2s | `config.py:24` + `whatsapp_service.py:175` |
 
-## Banco de Dados - Tabela `whatsapp_groups`
+## Uma cadeia de overflow por nicho
+
+O ecossistema é multi-nicho. `controle_grupos.nicho_id` diz qual nicho cada grupo atende, e
+`ordem_sequencial` é **por nicho** — "Bebês e Crianças #001" e "Geral #001" coexistem.
+
+Consequências no código:
+
+- `get_active_groups(nicho_id)`, `get_newest_group(nicho_id)` e `get_best_group_for_redirect(max, nicho_id)`
+  são escopados por nicho
+- `create_group(group, nicho_id)` calcula a `ordem_sequencial` contando só os grupos daquele nicho
+- `monitor.check_newest_group()` itera os nichos ativos e avalia o scale-out de cada cadeia
+  separadamente. **Um único processo atende todos os nichos** — um nicho novo é uma linha na tabela
+  `nichos`, não um deploy novo
+`main.py` e `create_first_group.py` aceitam `--nicho <slug>`. Sem o parâmetro, as operações valem
+para todos os nichos (ou caem no Geral, no caso de criação).
+
+### Identidade dos grupos (nome, descrição e foto)
+
+Cada nicho define a cara dos seus grupos, em colunas de `nichos`:
+
+| Coluna | Uso | Fallback |
+|---|---|---|
+| `nome_grupo` | Prefixo do nome: `"Caramelo Bebê"` → `"Caramelo Bebê #001"` | `nichos.nome` |
+| `descricao_grupo` | Descrição aplicada na criação | env `GROUP_DESCRIPTION` |
+| `imagem_url` | Foto do grupo | env `GROUP_IMAGE_URL` |
+
+As env vars `GROUP_DESCRIPTION` e `GROUP_IMAGE_URL` continuam existindo, mas viraram **apenas
+fallback**. Enquanto eram a única fonte, todo nicho herdaria a mesma descrição e a mesma foto —
+o oposto do que nichar significa. Com a identidade no banco, mudá-la é um `UPDATE`, sem deploy.
+
+O sufixo `#NNN` é obrigatório no nome: `monitor.py` extrai o número com `re.search(r'#(\d+)', ...)`
+para calcular o próximo grupo da cadeia. Um nome sem esse padrão faz o balancer cair no fallback de
+contar os grupos do nicho.
+
+## Banco de Dados - Tabela `controle_grupos`
+
+> A tabela real deste projeto é `controle_grupos`, com nomes de coluna em português. O arquivo
+> `supabase_setup_completo.sql` cria uma tabela `whatsapp_groups` que **não existe no banco e não é
+> usada pelo código** — SQL morto, mantido apenas por histórico.
+>
+> `_map_group()` em `supabase_client.py` é a única ponte entre os nomes do banco e os nomes da API
+> UAZAPI usados no modelo `WhatsAppGroup`.
 
 ```sql
-┌──────────────┬─────────┬──────────────────────────┐
-│ Campo        │ Tipo    │ Descrição                │
-├──────────────┼─────────┼──────────────────────────┤
-│ id           │ UUID    │ PK                       │
-│ group_id_api │ TEXT    │ ID do WhatsApp (unique)  │
-│ name         │ TEXT    │ Ex: "Grupo 101"          │
-│ invite_link  │ TEXT    │ URL do convite           │
-│ member_count │ INTEGER │ Quantidade de membros    │
-│ is_active    │ BOOLEAN │ Ativo/Desativado         │
-│ created_at   │ TIMESTAMP│ Data criação           │
-│ updated_at   │ TIMESTAMP│ Última atualização     │
-└──────────────┴─────────┴──────────────────────────┘
+┌──────────────────┬──────────┬────────────────────────────────────────┐
+│ Campo            │ Tipo     │ Descrição                              │
+├──────────────────┼──────────┼────────────────────────────────────────┤
+│ id               │ UUID     │ PK                                     │
+│ nicho_id         │ UUID     │ FK → nichos. NOT NULL, default 'geral' │
+│ group_jid        │ TEXT     │ JID do WhatsApp (unique)               │
+│ instance_name    │ TEXT     │ Número da instância UazAPI             │
+│ subject          │ TEXT     │ Nome do grupo, ex: "Geral #001"        │
+│ link_convite     │ TEXT     │ URL do convite                         │
+│ membros_atuais   │ INTEGER  │ Quantidade de membros                  │
+│ capacidade_max   │ INTEGER  │ Capacidade (default 800)               │
+│ status           │ TEXT     │ 'ativo' | 'cheio' | 'arquivado'        │
+│ ordem_sequencial │ INTEGER  │ Posição na cadeia DO NICHO             │
+│ created_at       │ TIMESTAMP│ Data de criação                        │
+└──────────────────┴──────────┴────────────────────────────────────────┘
+
+Não existe coluna `updated_at`.
 
 Índices:
-- idx_groups_active (is_active)
-- idx_groups_member_count (member_count)
-- idx_groups_created_at (created_at DESC)
-- idx_groups_load_balancer (is_active, member_count)
+- controle_grupos_group_jid_key (group_jid, unique)
+- controle_grupos_nicho_idx (nicho_id, status, ordem_sequencial)
 ```
 
 ## Segurança e Rate Limiting
@@ -208,19 +252,31 @@ wait_rate_limit()               # Sleep de 2s entre chamadas
 
 ```bash
 # Produção
-python main.py monitor          # Loop infinito com auto-scaling
+python main.py monitor                          # Loop infinito com auto-scaling (todos os nichos)
 
 # Manutenção
-python main.py sync             # Força sync de todos os grupos
-python main.py create-group     # Cria grupo manualmente
+python main.py sync                             # Força sync de todos os grupos
+python main.py create-group --nicho bebes       # Adiciona grupo à cadeia de um nicho
+python create_first_group.py --nicho bebes      # Cria o primeiro grupo de um nicho
+
+# Descoberta de fontes
+python main.py list-groups                      # Lista os grupos da instância com JID,
+                                                # marcando quais já estão em `fontes`
 
 # Debug
-python main.py get-best-group   # Testa algoritmo
-python main.py test             # Testa conexões
-
-# Desenvolvimento
-python main.py test             # Valida setup inicial
+python main.py get-best-group --nicho bebes     # Testa o algoritmo dentro de um nicho
+python main.py test                             # Testa conexões e lista nichos
 ```
+
+### Descobrindo o JID de um grupo-fonte
+
+Ao entrar num grupo novo para monitorar, é preciso o JID dele para cadastrar em `fontes`.
+`list-groups` resolve isso: usa `WHATSAPP_API_TOKEN`, então **precisa ser o token da instância que
+está nos grupos de origem** — que pode não ser a mesma usada para publicar.
+
+Alternativa sem credencial: `filtrobot/fontes.py` loga em nível INFO todo grupo desconhecido que
+manda mensagem (`Fonte não cadastrada (whatsapp/<JID>) — roteando para o nicho Geral`). Basta olhar
+o log do webhook depois que uma oferta cair no grupo.
 
 ## Logs e Monitoramento
 
