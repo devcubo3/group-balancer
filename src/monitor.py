@@ -77,19 +77,32 @@ class GroupMonitor:
                     group_name=f"{nicho.prefixo_grupo()} #001",
                     nicho=nicho
                 )
-                if new_group:
-                    new_group_created = True
-                    new_group_id = new_group.group_id_api
 
-                    # Salva log da criação do primeiro grupo
+                # Registra o resultado nos DOIS casos. Sem o log de falha, um
+                # nicho que não consegue criar grupo (token inválido, por
+                # exemplo) fica indistinguível de um ciclo saudável em
+                # monitor_logs — a falha só aparecia em api_call_logs.
+                if new_group:
                     log = MonitorLog(
                         monitor_type="newest_group",
+                        group_name=new_group.name,
+                        new_group_id_api=new_group.group_id_api,
                         status_message=f"Primeiro grupo do nicho {nicho.slug} criado",
                         new_group_created=True,
-                        new_group_id_api=new_group_id,
                         has_error=False
                     )
-                    self.load_balancer.db.save_monitor_log(log)
+                else:
+                    logger.error(f"✗ Falha ao criar o primeiro grupo do nicho {nicho.slug}")
+                    log = MonitorLog(
+                        monitor_type="newest_group",
+                        group_name=f"{nicho.prefixo_grupo()} #001",
+                        status_message=f"Falha ao criar o primeiro grupo do nicho {nicho.slug}",
+                        new_group_created=False,
+                        has_error=True,
+                        error_message="create_new_group retornou None — ver api_call_logs"
+                    )
+
+                self.load_balancer.db.save_monitor_log(log)
                 return
 
             # Guarda contagem anterior
