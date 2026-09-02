@@ -12,7 +12,10 @@ class Settings(BaseSettings):
     supabase_url: str = Field(..., alias="SUPABASE_URL")
     supabase_key: str = Field(..., alias="SUPABASE_KEY")
 
-    # WhatsApp API
+    # WhatsApp API (UazAPI)
+    # whatsapp_api_token DEVE ser o token da INSTÂNCIA, não o da conta UazAPI:
+    # ele vai no header `token` das chamadas /group/*, e o token da conta é
+    # recusado com HTTP 401 "Invalid token".
     whatsapp_api_url: str = Field("https://free.uazapi.com", alias="WHATSAPP_API_URL")
     whatsapp_api_token: str = Field("c11bf8be-2373-4904-aa3f-baefcfc16614", alias="WHATSAPP_API_TOKEN")
     whatsapp_admin_number: str = Field("553391269004", alias="WHATSAPP_ADMIN_NUMBER")
