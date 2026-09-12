@@ -202,6 +202,39 @@
   .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
   .check { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--ink-2); cursor: pointer; }
 
+  /* filtro por grupo: chips em vez de menu suspenso porque o estado fica
+     visivel sem abrir nada, e da para comparar dois grupos com dois cliques */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; }
+  .chips button {
+    font: inherit; font-size: 12.5px;
+    display: inline-flex; align-items: baseline; gap: 7px;
+    padding: 5px 11px; border-radius: 999px; cursor: pointer;
+    background: var(--surface); color: var(--ink-2);
+    border: 1px solid var(--line-2);
+  }
+  .chips button:hover { border-color: var(--muted); }
+  .chips button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .chips button i {
+    font-style: normal; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase;
+    font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    color: var(--muted);
+  }
+  .chips button[aria-pressed="true"] i { color: var(--surface); opacity: .7; }
+  .chips button.arq { text-decoration: line-through; text-decoration-color: var(--line-2); }
+
+  /* resumo de um dia so: um grafico de barras com uma barra unica nao diz nada
+     que tres numeros nao digam melhor */
+  .resumo-dia { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 16px; padding-top: 14px;
+                border-top: 1px solid var(--line); }
+  .resumo-dia div { display: flex; flex-direction: column; gap: 1px; }
+  .resumo-dia .v {
+    font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2;
+  }
+  .resumo-dia .v.up { color: var(--entra); }
+  .resumo-dia .v.down { color: var(--sai); }
+  .resumo-dia .v.flat { color: var(--muted); }
+
   .legend { margin-left: auto; display: flex; gap: 14px; align-items: center; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
   .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
@@ -327,6 +360,7 @@
 
   <div class="controls">
     <div class="seg" role="group" aria-label="Período">
+      <button type="button" data-dias="1" aria-pressed="false">Hoje</button>
       <button type="button" data-dias="7" aria-pressed="false">7 dias</button>
       <button type="button" data-dias="30" aria-pressed="true">30 dias</button>
       <button type="button" data-dias="90" aria-pressed="false">90 dias</button>
@@ -337,6 +371,8 @@
       <span><i class="swatch" style="background:var(--sai)"></i> Saídas</span>
     </div>
   </div>
+
+  <div class="chips" id="chips" role="group" aria-label="Filtrar por grupo"></div>
 
   <div id="grupos"><p class="empty">Carregando grupos&hellip;</p></div>
 
@@ -366,7 +402,8 @@
   var ANON = "__SUPABASE_KEY__";
   var SCALE_OUT = Number("__SCALE_OUT__") || 950;
 
-  var state = { dias: 30, arquivados: false, grupos: [], fluxo: [], saude: null, topo: 1 };
+  var state = { dias: 30, arquivados: false, grupos: [], fluxo: [], saude: null, topo: 1, sel: {} };
+  function temSelecao() { return Object.keys(state.sel).length > 0; }
 
   function api(path) {
     return fetch(SUPABASE_URL + "/rest/v1/" + path, {
@@ -387,6 +424,28 @@
     return p[2] + "/" + p[1];
   }
   function plural(n, um, muitos) { return n === 1 ? um : muitos; }
+
+  // "Hoje" e um dia so: falar "em 1 dias" fica errado e "em 1 dia" fica esquisito.
+  function rotuloPeriodo() {
+    return state.dias === 1 ? "hoje" : "em " + state.dias + " dias";
+  }
+
+  // Grupos que o painel deve mostrar agora: o filtro de arquivados primeiro,
+  // depois a selecao por chips. Selecao vazia = todos, e nao nenhum.
+  function gruposVisiveis() {
+    return state.grupos.filter(function (g) {
+      if (!state.arquivados && g.status !== "ativo") return false;
+      return !temSelecao() || state.sel[g.group_jid];
+    });
+  }
+
+  function fluxoVisivel(desde) {
+    var jids = {};
+    gruposVisiveis().forEach(function (g) { jids[g.group_jid] = true; });
+    return state.fluxo.filter(function (f) {
+      return (!desde || f.dia >= desde) && jids[f.group_id_api];
+    });
+  }
 
   // ---------- saude do monitor ----------
   function renderSaude() {
@@ -428,44 +487,95 @@
          s.grupos_criados_24h + " " + plural(s.grupos_criados_24h, "grupo criado", "grupos criados") + " /24h");
   }
 
+  // ---------- filtro por grupo ----------
+  function renderChips() {
+    var host = document.getElementById("chips");
+    var candidatos = state.grupos.filter(function (g) {
+      return state.arquivados || g.status === "ativo";
+    });
+
+    // Um grupo que saiu da lista (arquivados desmarcados) nao pode continuar
+    // filtrando em silencio.
+    var validos = {};
+    candidatos.forEach(function (g) { validos[g.group_jid] = true; });
+    Object.keys(state.sel).forEach(function (jid) { if (!validos[jid]) delete state.sel[jid]; });
+
+    host.innerHTML = "";
+    if (candidatos.length < 2) return; // filtrar um grupo unico nao filtra nada
+
+    function chip(rotulo, nicho, jid, ativo, arquivado) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("aria-pressed", ativo ? "true" : "false");
+      if (jid) b.dataset.jid = jid;
+      if (arquivado) b.className = "arq";
+      b.appendChild(document.createTextNode(rotulo));
+      if (nicho) {
+        var i = document.createElement("i");
+        i.textContent = nicho;
+        b.appendChild(i);
+      }
+      host.appendChild(b);
+      return b;
+    }
+
+    chip("Todos", "", "", !temSelecao(), false).addEventListener("click", function () {
+      state.sel = {};
+      renderTudo();
+    });
+
+    candidatos.forEach(function (g) {
+      var b = chip(g.nome, g.nicho || "sem nicho", g.group_jid,
+                   !!state.sel[g.group_jid], g.status !== "ativo");
+      b.addEventListener("click", function () {
+        if (state.sel[g.group_jid]) delete state.sel[g.group_jid];
+        else state.sel[g.group_jid] = true;
+        renderTudo();
+      });
+    });
+  }
+
   // ---------- tiles ----------
   function renderTiles() {
-    var ativos = state.grupos.filter(function (g) { return g.status === "ativo"; });
+    // As lajotas somam o que esta visivel: com um grupo filtrado, "2 grupos
+    // ativos" em cima e um card so embaixo seriam dois numeros se contradizendo.
+    var visiveis = gruposVisiveis();
+    var ativos = visiveis.filter(function (g) { return g.status === "ativo"; });
     var membros = ativos.reduce(function (a, g) { return a + (g.membros_atuais || 0); }, 0);
+
     var hoje = hojeISO();
-    var fHoje = state.fluxo.filter(function (f) {
-      return f.dia === hoje && (state.arquivados || f.status_grupo === "ativo");
-    });
+    var fHoje = fluxoVisivel(null).filter(function (f) { return f.dia === hoje; });
     var ent = fHoje.reduce(function (a, f) { return a + f.entradas; }, 0);
     var sai = fHoje.reduce(function (a, f) { return a + f.saidas; }, 0);
 
     var nichos = {};
     ativos.forEach(function (g) { nichos[g.nicho || "sem nicho"] = true; });
     var nq = Object.keys(nichos).length;
+    var arquivadosVisiveis = visiveis.length - ativos.length;
 
     document.getElementById("t-grupos").textContent = ativos.length;
     document.getElementById("t-grupos-f").textContent =
+      (temSelecao() ? "filtrado · " : "") +
       "em " + nq + " " + plural(nq, "nicho", "nichos") +
-      (state.grupos.length > ativos.length ? " · " + (state.grupos.length - ativos.length) + " arquivados" : "");
+      (arquivadosVisiveis > 0 ? " · " + arquivadosVisiveis + " arquivados" : "");
 
     document.getElementById("t-membros").textContent = membros.toLocaleString("pt-BR");
     var cap = ativos.reduce(function (a, g) { return a + (g.capacidade_max || 0); }, 0);
-    document.getElementById("t-membros-f").textContent = cap ? "de " + cap.toLocaleString("pt-BR") + " de capacidade" : " ";
+    document.getElementById("t-membros-f").textContent =
+      cap ? "de " + cap.toLocaleString("pt-BR") + " de capacidade" : " ";
 
     document.getElementById("t-entra").textContent = ent ? "+" + ent : "0";
     document.getElementById("t-sai").textContent = sai ? "−" + sai : "0";
-    // Rodape das duas lajotas de fluxo: o total do periodo selecionado. Um dia
-    // isolado diz pouco; o acumulado mostra se o grupo cresce ou so gira.
-    var desdeP = diasAtrasISO(state.dias - 1);
-    var noPeriodo = state.fluxo.filter(function (f) {
-      return f.dia >= desdeP && (state.arquivados || f.status_grupo === "ativo");
-    });
+
+    // Rodape das lajotas de fluxo: o total do periodo. Um dia isolado diz
+    // pouco; o acumulado mostra se o grupo cresce ou so gira.
+    var noPeriodo = fluxoVisivel(diasAtrasISO(state.dias - 1));
     var entP = noPeriodo.reduce(function (a, f) { return a + f.entradas; }, 0);
     var saiP = noPeriodo.reduce(function (a, f) { return a + f.saidas; }, 0);
     var saldoP = entP - saiP;
-    document.getElementById("t-entra-f").textContent = "+" + entP + " em " + state.dias + " dias";
+    document.getElementById("t-entra-f").textContent = "+" + entP + " " + rotuloPeriodo();
     document.getElementById("t-sai-f").textContent =
-      "−" + saiP + " em " + state.dias + " dias · saldo " + (saldoP > 0 ? "+" : "") + saldoP;
+      "−" + saiP + " " + rotuloPeriodo() + " · saldo " + (saldoP > 0 ? "+" : "") + saldoP;
   }
 
   // ---------- grafico de barras divergentes ----------
@@ -621,22 +731,23 @@
     host.innerHTML = "";
     var desde = diasAtrasISO(state.dias - 1);
 
-    var lista = state.grupos.filter(function (g) {
-      return state.arquivados || g.status === "ativo";
-    }).sort(function (a, b) {
+    var lista = gruposVisiveis().sort(function (a, b) {
       if (a.status !== b.status) return a.status === "ativo" ? -1 : 1;
       return (b.membros_atuais || 0) - (a.membros_atuais || 0);
     });
 
-    if (!lista.length) { host.innerHTML = '<p class="empty">Nenhum grupo para mostrar.</p>'; return; }
+    if (!lista.length) {
+      host.innerHTML = '<p class="empty">Nenhum grupo selecionado. Clique em "Todos" para voltar.</p>';
+      return;
+    }
 
-    // Escala compartilhada por todos os grupos: e a MESMA medida em grupos
+    // Escala compartilhada pelos grupos VISIVEIS: e a mesma medida em grupos
     // diferentes, entao eixos independentes fariam 1 pessoa saindo de um grupo
-    // parecer o mesmo que 30 saindo de outro. Um grupo parado tem que ler
-    // como parado ao lado de um que se mexe.
+    // parecer o mesmo que 30 saindo de outro. Compartilhar so entre os visiveis
+    // e o que torna o filtro util: isolando um grupo pequeno, a escala desce
+    // ate ele e o movimento dele volta a aparecer.
     var picoGlobal = 1;
-    state.grupos.forEach(function (g) {
-      if (!state.arquivados && g.status !== "ativo") return;
+    lista.forEach(function (g) {
       state.fluxo.forEach(function (f) {
         if (f.group_id_api === g.group_jid && f.dia >= desde) {
           picoGlobal = Math.max(picoGlobal, f.entradas, f.saidas);
@@ -670,6 +781,15 @@
         linhas.push(f ? f : { dia: iso, entradas: 0, saidas: 0, saldo: 0, membros_fim_do_dia: g.membros_atuais });
       }
 
+      host.appendChild(card);
+
+      // Um dia so nao e uma serie temporal: um grafico com uma barra unica nao
+      // diz nada que tres numeros nao digam melhor.
+      if (state.dias === 1) {
+        card.appendChild(resumoDoDia(linhas[0]));
+        return;
+      }
+
       var temMov = linhas.some(function (d) { return d.entradas || d.saidas; });
       var box = document.createElement("div");
       box.className = "chart-box";
@@ -677,18 +797,33 @@
       tip.className = "tip";
       box.appendChild(tip);
       card.appendChild(box);
-      host.appendChild(card);
 
       if (!temMov) {
-        var p = document.createElement("p");
-        p.className = "empty";
-        p.textContent = "Sem entradas nem saídas registradas nos últimos " + state.dias + " dias.";
-        box.appendChild(p);
+        var pvazio = document.createElement("p");
+        pvazio.className = "empty";
+        pvazio.textContent = "Sem entradas nem saídas registradas nos últimos " + state.dias + " dias.";
+        box.appendChild(pvazio);
       } else {
         box.appendChild(desenhaGrafico(box, linhas, box.clientWidth || 640, state.topo));
         box._linhas = linhas;
       }
     });
+  }
+
+  function resumoDoDia(d) {
+    var el = document.createElement("div");
+    el.className = "resumo-dia";
+    function bloco(rotulo, valor, classe) {
+      return '<div><span class="eyebrow">' + rotulo + '</span>' +
+             '<span class="v ' + classe + '">' + valor + "</span></div>";
+    }
+    var saldo = (d.saldo > 0 ? "+" : "") + d.saldo;
+    el.innerHTML =
+      bloco("Entradas", d.entradas ? "+" + d.entradas : "0", d.entradas ? "up" : "flat") +
+      bloco("Saídas", d.saidas ? "−" + d.saidas : "0", d.saidas ? "down" : "flat") +
+      bloco("Saldo", saldo, d.saldo > 0 ? "up" : d.saldo < 0 ? "down" : "flat") +
+      bloco("Membros agora", d.membros_fim_do_dia, "flat");
+    return el;
   }
 
   function redesenhaGraficos() {
@@ -703,20 +838,20 @@
   // ---------- tabela ----------
   function renderTabela() {
     var tb = document.getElementById("tbody");
-    var desde = diasAtrasISO(state.dias - 1);
-    var linhas = state.fluxo.filter(function (f) {
-      return f.dia >= desde && (state.arquivados || f.status_grupo === "ativo") && (f.entradas || f.saidas);
-    }).sort(function (a, b) {
-      return a.dia === b.dia ? a.group_name.localeCompare(b.group_name) : (a.dia < b.dia ? 1 : -1);
-    });
+    var linhas = fluxoVisivel(diasAtrasISO(state.dias - 1))
+      .filter(function (f) { return f.entradas || f.saidas; })
+      .sort(function (a, b) {
+        return a.dia === b.dia ? a.group_name.localeCompare(b.group_name) : (a.dia < b.dia ? 1 : -1);
+      });
 
     document.getElementById("tab-note").textContent =
-      linhas.length
-        ? "Os mesmos números dos gráficos. Só dias com movimento, do mais recente para o mais antigo."
-        : "Os mesmos números dos gráficos, em tabela.";
+      !linhas.length ? "Os mesmos números, em tabela."
+      : state.dias === 1 ? "O movimento de hoje, grupo a grupo."
+      : "Os mesmos números dos gráficos. Só dias com movimento, do mais recente para o mais antigo.";
 
     if (!linhas.length) {
-      tb.innerHTML = '<tr><td colspan="6" class="day-cell">Nenhum movimento no período.</td></tr>';
+      tb.innerHTML = '<tr><td colspan="6" class="day-cell">Nenhum movimento ' +
+        (state.dias === 1 ? "hoje" : "no período") + ".</td></tr>";
       return;
     }
 
@@ -735,7 +870,7 @@
   }
 
   function renderTudo() {
-    renderSaude(); renderTiles(); renderGrupos(); renderTabela();
+    renderChips(); renderSaude(); renderTiles(); renderGrupos(); renderTabela();
   }
 
   // ---------- carga ----------
