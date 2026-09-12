@@ -4,12 +4,12 @@ Monitor de grupos - Verificação em tempo real e sincronização a cada 12 hora
 import logging
 import time
 import schedule
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Tuple
 
 from .config import settings
 from .load_balancer import LoadBalancer
-from .models import MonitorLog
+from .models import MonitorLog, WhatsAppGroup
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,20 @@ class GroupMonitor:
         logger.info(f"🔍 VERIFICAÇÃO AUTOMÁTICA - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 60)
 
-        nichos = self.load_balancer.db.get_active_nichos()
+        try:
+            nichos = self.load_balancer.db.get_active_nichos()
+        except Exception as e:
+            # Pular o ciclo é o comportamento certo: sem a lista de nichos não
+            # há decisão segura a tomar. Só não pode passar em branco.
+            logger.error(f"✗ Falha ao buscar nichos ativos, ciclo abortado: {e}", exc_info=True)
+            self.load_balancer.db.save_monitor_log(MonitorLog(
+                monitor_type="newest_group",
+                status_message="Ciclo abortado: falha ao buscar nichos ativos",
+                has_error=True,
+                error_message=str(e),
+            ))
+            return
+
         if not nichos:
             logger.warning("⚠ Nenhum nicho ativo cadastrado — nada a monitorar")
             return
@@ -51,10 +64,95 @@ class GroupMonitor:
             except Exception as e:
                 logger.error(f"✗ Erro ao verificar nicho {nicho.slug}: {e}", exc_info=True)
 
+    def _bloqueio_por_cooldown(self, stats: dict) -> Optional[str]:
+        """
+        Motivo do bloqueio se o nicho já ganhou um grupo há pouco, senão None.
+
+        Um grupo leva semanas para encher, então dois nascimentos seguidos são
+        sempre bug. É a rede de segurança por trás dos guards, não a correção.
+        """
+        ultimo = stats.get("ultimo_created_at")
+        if not ultimo:
+            return None
+
+        cooldown = timedelta(minutes=settings.group_create_cooldown_minutes)
+        idade = datetime.now(timezone.utc) - ultimo
+
+        if idade >= cooldown:
+            return None
+
+        restante = int((cooldown - idade).total_seconds() // 60) + 1
+        return (
+            f"cooldown ativo — último grupo do nicho nasceu há "
+            f"{int(idade.total_seconds() // 60)}min "
+            f"(mínimo {settings.group_create_cooldown_minutes}min, faltam ~{restante}min)"
+        )
+
+    def _criar_grupo_do_nicho(
+        self, nicho, motivo: str, exige_nicho_vazio: bool = False
+    ) -> Tuple[Optional[WhatsAppGroup], str, Optional[str]]:
+        """
+        Caminho ÚNICO de criação de grupo do monitor.
+
+        Concentra aqui os guards e a numeração porque antes os dois caminhos
+        (primeiro grupo e scale-out) numeravam de jeitos diferentes — e o de
+        primeiro grupo hardcodava `#001`, criando um segundo "#001" ao lado do
+        "#023" que já existia.
+
+        Args:
+            motivo: aparece no log, distingue 'nicho sem grupo' de 'scale-out'
+            exige_nicho_vazio: confirma, com uma segunda leitura independente,
+                que o nicho realmente não tem grupo nenhum antes de criar
+
+        Returns:
+            (grupo_ou_None, status_message, error_message_ou_None)
+        """
+        stats = self.load_balancer.db.get_nicho_group_stats(nicho.id)
+
+        # Guard de dupla confirmação: criar grupo é irreversível (nasce de
+        # verdade no WhatsApp e passa a receber ofertas e leads), então as duas
+        # leituras precisam concordar que o nicho está vazio.
+        if exige_nicho_vazio and stats["total"] > 0:
+            erro = (
+                f"leitura inicial não viu grupo ativo em {nicho.slug}, mas a "
+                f"confirmação encontrou {stats['total']} grupo(s) na cadeia"
+            )
+            logger.error(f"⛔ Criação abortada ({motivo}): {erro}")
+            return None, f"Criação abortada: leituras divergentes ({motivo})", erro
+
+        bloqueio = self._bloqueio_por_cooldown(stats)
+        if bloqueio:
+            logger.error(f"⛔ Criação barrada ({motivo}): {bloqueio}")
+            return None, f"Criação barrada ({motivo})", bloqueio
+
+        # Numeração continua de onde a cadeia parou, contando inclusive grupos
+        # arquivados — o nome é a identidade do grupo na lista do WhatsApp e
+        # repetir um número já usado confunde quem já está nos grupos.
+        numero = stats["max_numero"] + 1
+        nome = f"{nicho.prefixo_grupo()} #{numero:03d}"
+
+        novo = self.load_balancer.create_new_group(
+            group_number=numero, group_name=nome, nicho=nicho
+        )
+
+        if novo:
+            logger.info(f"✅ NOVO GRUPO CRIADO: {novo.name}\n   Link: {novo.invite_link}")
+            return novo, f"Grupo {nome} criado no nicho {nicho.slug} ({motivo})", None
+
+        logger.error(f"✗ FALHA ao criar {nome} no nicho {nicho.slug}")
+        return (
+            None,
+            f"Falha ao criar {nome} no nicho {nicho.slug} ({motivo})",
+            "create_new_group retornou None — ver api_call_logs",
+        )
+
     def _check_nicho(self, nicho):
         """
         Verifica a cadeia de grupos de um nicho e faz scale-out se necessário.
-        Salva log da verificação no banco de dados.
+
+        Salva SEMPRE um log em monitor_logs, inclusive quando a verificação
+        falha: antes o log dependia de ter lido um grupo, então uma falha de
+        leitura não deixava rastro nenhum e o bug ficou horas invisível.
         """
         newest_group = None
         previous_count = None
@@ -62,61 +160,43 @@ class GroupMonitor:
         new_group_id = None
         error_occurred = False
         error_msg = None
+        status_message = None
+        group_name = None
 
         try:
             logger.info(f"🏷️  Nicho: {nicho.nome} ({nicho.slug})")
 
-            # Busca o grupo mais novo DO NICHO
+            # Busca o grupo mais novo DO NICHO. Levanta se a consulta falhar —
+            # None aqui significa exclusivamente "nicho sem grupo ativo".
             newest_group = self.load_balancer.db.get_newest_group(nicho.id)
 
             if not newest_group:
-                logger.warning(f"⚠ Nicho {nicho.slug} sem grupo! Criando o primeiro...")
+                logger.warning(f"⚠ Nicho {nicho.slug} sem grupo! Confirmando antes de criar...")
 
-                new_group = self.load_balancer.create_new_group(
-                    group_number=1,
-                    group_name=f"{nicho.prefixo_grupo()} #001",
-                    nicho=nicho
+                novo, status_message, error_msg = self._criar_grupo_do_nicho(
+                    nicho, motivo="nicho sem grupo", exige_nicho_vazio=True
                 )
-
-                # Registra o resultado nos DOIS casos. Sem o log de falha, um
-                # nicho que não consegue criar grupo (token inválido, por
-                # exemplo) fica indistinguível de um ciclo saudável em
-                # monitor_logs — a falha só aparecia em api_call_logs.
-                if new_group:
-                    log = MonitorLog(
-                        monitor_type="newest_group",
-                        group_name=new_group.name,
-                        new_group_id_api=new_group.group_id_api,
-                        status_message=f"Primeiro grupo do nicho {nicho.slug} criado",
-                        new_group_created=True,
-                        has_error=False
-                    )
-                else:
-                    logger.error(f"✗ Falha ao criar o primeiro grupo do nicho {nicho.slug}")
-                    log = MonitorLog(
-                        monitor_type="newest_group",
-                        group_name=f"{nicho.prefixo_grupo()} #001",
-                        status_message=f"Falha ao criar o primeiro grupo do nicho {nicho.slug}",
-                        new_group_created=False,
-                        has_error=True,
-                        error_message="create_new_group retornou None — ver api_call_logs"
-                    )
-
-                self.load_balancer.db.save_monitor_log(log)
+                # group_name guarda o nome de um grupo que existe. Se a criação
+                # foi barrada, não existe nenhum — o motivo está no status_message.
+                group_name = novo.name if novo else None
+                new_group_created = novo is not None
+                new_group_id = novo.group_id_api if novo else None
+                error_occurred = error_msg is not None
                 return
 
-            # Guarda contagem anterior
             previous_count = newest_group.member_count
+            group_name = newest_group.name
 
             # Sincroniza a contagem de membros do grupo mais novo
             logger.info(f"📊 Verificando grupo: {newest_group.name}")
             self.load_balancer.sync_group_members(newest_group)
 
             # Busca novamente após sincronização
-            newest_group = self.load_balancer.db.get_newest_group(nicho.id)
+            newest_group = self.load_balancer.db.get_newest_group(nicho.id) or newest_group
+            group_name = newest_group.name
+            status_message = f"Verificação do grupo mais novo: {newest_group.member_count} membros"
 
-            # Verifica se precisa criar novo grupo
-            if newest_group and self.load_balancer.should_scale_out(newest_group):
+            if self.load_balancer.should_scale_out(newest_group):
                 logger.warning(
                     f"🚨 SCALE-OUT NECESSÁRIO!\n"
                     f"   Nicho: {nicho.nome}\n"
@@ -125,36 +205,12 @@ class GroupMonitor:
                     f"   Threshold: {settings.scale_out_threshold}"
                 )
 
-                # Extrai o número do grupo atual para criar o próximo
-                # Ex: "Bebês e Crianças #001" -> 2 (próximo)
-                import re
-                match = re.search(r'#(\d+)', newest_group.name or "")
-                if match:
-                    next_number = int(match.group(1)) + 1
-                else:
-                    # Sem o padrão no nome, conta os grupos do nicho
-                    active_groups = self.load_balancer.db.get_active_groups(nicho.id)
-                    next_number = len(active_groups) + 1
-
-                next_group_name = f"{nicho.prefixo_grupo()} #{next_number:03d}"
-
-                new_group = self.load_balancer.create_new_group(
-                    group_number=next_number,
-                    group_name=next_group_name,
-                    nicho=nicho
+                novo, status_message, error_msg = self._criar_grupo_do_nicho(
+                    nicho, motivo="scale-out"
                 )
-
-                if new_group:
-                    new_group_created = True
-                    new_group_id = new_group.group_id_api
-                    logger.info(
-                        f"✅ NOVO GRUPO CRIADO: {new_group.name}\n"
-                        f"   Link: {new_group.invite_link}"
-                    )
-                else:
-                    error_occurred = True
-                    error_msg = "Falha ao criar novo grupo via API"
-                    logger.error("✗ FALHA ao criar novo grupo!")
+                new_group_created = novo is not None
+                new_group_id = novo.group_id_api if novo else None
+                error_occurred = error_msg is not None
 
             else:
                 logger.info(
@@ -165,25 +221,29 @@ class GroupMonitor:
         except Exception as e:
             error_occurred = True
             error_msg = str(e)
+            status_message = f"Falha ao verificar o nicho {nicho.slug}"
             logger.error(f"✗ Erro na verificação do grupo mais novo: {e}", exc_info=True)
 
         finally:
-            # Salva log da verificação
-            if newest_group:
-                log = MonitorLog(
-                    monitor_type="newest_group",
-                    group_id_api=newest_group.group_id_api,
-                    group_name=newest_group.name,
-                    member_count=newest_group.member_count,
-                    previous_count=previous_count,
-                    count_difference=newest_group.member_count - previous_count if previous_count else 0,
-                    new_group_created=new_group_created,
-                    new_group_id_api=new_group_id,
-                    status_message=f"Verificação do grupo mais novo: {newest_group.member_count} membros",
-                    has_error=error_occurred,
-                    error_message=error_msg
-                )
-                self.load_balancer.db.save_monitor_log(log)
+            member_count = newest_group.member_count if newest_group else None
+            log = MonitorLog(
+                monitor_type="newest_group",
+                group_id_api=newest_group.group_id_api if newest_group else None,
+                group_name=group_name,
+                member_count=member_count,
+                previous_count=previous_count,
+                count_difference=(
+                    member_count - previous_count
+                    if member_count is not None and previous_count is not None
+                    else 0
+                ),
+                new_group_created=new_group_created,
+                new_group_id_api=new_group_id,
+                status_message=status_message or f"Ciclo do nicho {nicho.slug}",
+                has_error=error_occurred,
+                error_message=error_msg,
+            )
+            self.load_balancer.db.save_monitor_log(log)
 
     def daily_sync(self):
         """

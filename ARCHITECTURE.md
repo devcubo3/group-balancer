@@ -243,6 +243,39 @@ Não existe coluna `updated_at`.
 - Logs detalhados de erros
 - Continuidade do sistema em caso de falha pontual
 
+### Vazio nunca pode significar "falhou" (invariante)
+
+As consultas que alimentam decisões do monitor — `get_active_nichos`,
+`get_active_groups`, `get_newest_group`, `get_best_group_for_redirect`,
+`get_nicho_group_stats` — **levantam exceção** quando a consulta falha. `None` e
+`[]` significam exclusivamente "o banco não tem essa linha". Não capture
+`APIError` dentro delas para devolver vazio.
+
+O motivo é o incidente de 2026-09-12: `get_newest_group` engolia o `APIError` e
+devolvia `None`; `_check_nicho` lia isso como "nicho sem grupo" e criava um grupo
+novo. Em 9h uma instabilidade passageira do Supabase virou 8 grupos "#001"
+duplicados — que passaram a receber todas as ofertas e, pior, a roubar todos os
+leads da landing page, que redireciona para o grupo com menos membros.
+
+Criar grupo é irreversível (nasce de verdade no WhatsApp e entra no funil), então
+o caminho de criação tem três camadas, todas em `_criar_grupo_do_nicho`:
+
+| Camada | O que faz |
+|---|---|
+| Dupla confirmação | uma segunda leitura independente precisa concordar que o nicho está vazio |
+| Cooldown | um nicho não ganha dois grupos em menos de `GROUP_CREATE_COOLDOWN_MINUTES` (60) — um grupo leva semanas para encher, dois nascimentos seguidos são sempre bug |
+| Índice único parcial | `migrations/001_guard_grupo_duplicado.sql` recusa no banco um segundo grupo ativo com o mesmo nome no nicho |
+
+A numeração (`#NNN`) também vive só ali, derivada do maior número já usado na
+cadeia **inclusive entre arquivados** — contar grupos ativos volta a numerar do
+começo assim que um antigo é arquivado, e o branch antigo de "primeiro grupo"
+hardcodava `#001` mesmo com a cadeia do geral já em `#023`.
+
+`_check_nicho` grava em `monitor_logs` em **todo** ciclo, inclusive nos que
+falham. Antes o log dependia de ter lido um grupo, então falha de leitura não
+deixava rastro — foi o que manteve o bug invisível por horas. Ciclo sem log é
+sintoma, não silêncio saudável.
+
 ### Variáveis Sensíveis
 - Tokens e keys no `.env` (não versionado)
 - `.gitignore` protege credenciais

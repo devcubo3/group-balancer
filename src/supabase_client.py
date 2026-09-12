@@ -1,7 +1,18 @@
 """
 Cliente para interação com Supabase.
+
+INVARIANTE DESTE MÓDULO (não quebrar): as consultas que alimentam decisões do
+monitor — `get_active_groups`, `get_newest_group`, `get_best_group_for_redirect`,
+`get_nicho_group_stats` — **levantam** exceção quando a consulta falha e só
+devolvem vazio (`None` / `[]`) quando o banco realmente não tem a linha.
+
+Confundir os dois casos foi a causa do incidente de 2026-09-12: `get_newest_group`
+engolia o `APIError` e devolvia `None`, o monitor lia isso como "nicho sem grupo"
+e criava um grupo novo. Uma instabilidade passageira do Supabase virava 8 grupos
+"#001" duplicados recebendo ofertas e leads.
 """
 import logging
+import re
 from typing import List, Optional
 from datetime import datetime
 
@@ -12,6 +23,22 @@ from .config import settings
 from .models import WhatsAppGroup, MonitorLog, ApiCallLog, Nicho
 
 logger = logging.getLogger(__name__)
+
+_NUMERO_GRUPO_RE = re.compile(r"#(\d+)")
+
+
+def parse_group_number(name: Optional[str]) -> Optional[int]:
+    """
+    Extrai o número da cadeia do nome do grupo: "Caramelo Ofertas #023" -> 23.
+
+    Devolve None quando o nome não segue o padrão (grupo criado à mão, por
+    exemplo). Único lugar que conhece esse formato — monitor e load_balancer
+    derivavam o número cada um do seu jeito.
+    """
+    if not name:
+        return None
+    match = _NUMERO_GRUPO_RE.search(name)
+    return int(match.group(1)) if match else None
 
 
 def _map_group(db_data: dict) -> WhatsAppGroup:
@@ -58,21 +85,20 @@ class SupabaseClient:
         """
         Busca os nichos ativos. Um único processo gerencia todos eles, para que
         um nicho novo seja uma linha em tabela e não um deploy novo.
+
+        Levanta em erro: uma lista vazia faz o monitor pular o ciclo inteiro, e
+        isso precisa significar "nenhum nicho ativo", não "o Supabase piscou".
         """
-        try:
-            response = (
-                self.client.table("nichos")
-                .select("id, nome, slug, is_active, nome_grupo, descricao_grupo, imagem_url")
-                .eq("is_active", True)
-                .order("slug")
-                .execute()
-            )
-            nichos = [Nicho(**n) for n in response.data]
-            logger.info(f"✓ {len(nichos)} nicho(s) ativo(s)")
-            return nichos
-        except APIError as e:
-            logger.error(f"✗ Erro ao buscar nichos: {e}")
-            return []
+        response = (
+            self.client.table("nichos")
+            .select("id, nome, slug, is_active, nome_grupo, descricao_grupo, imagem_url")
+            .eq("is_active", True)
+            .order("slug")
+            .execute()
+        )
+        nichos = [Nicho(**n) for n in response.data]
+        logger.info(f"✓ {len(nichos)} nicho(s) ativo(s)")
+        return nichos
 
     def get_active_groups(self, nicho_id: Optional[str] = None) -> List[WhatsAppGroup]:
         """
@@ -82,27 +108,23 @@ class SupabaseClient:
             nicho_id: restringe a um nicho. None devolve todos os nichos.
 
         Returns:
-            Lista de grupos ativos
+            Lista de grupos ativos. Lista vazia significa "o nicho não tem
+            grupo"; falha de consulta levanta (ver invariante no topo do módulo).
         """
-        try:
-            query = (
-                self.client.table(self.table_name)
-                .select("*")
-                .eq("status", "ativo")
-            )
-            if nicho_id:
-                query = query.eq("nicho_id", nicho_id)
+        query = (
+            self.client.table(self.table_name)
+            .select("*")
+            .eq("status", "ativo")
+        )
+        if nicho_id:
+            query = query.eq("nicho_id", nicho_id)
 
-            response = query.order("membros_atuais", desc=False).execute()
+        response = query.order("membros_atuais", desc=False).execute()
 
-            groups = [_map_group(db_data) for db_data in response.data]
+        groups = [_map_group(db_data) for db_data in response.data]
 
-            logger.info(f"✓ {len(groups)} grupos ativos encontrados no Supabase")
-            return groups
-
-        except APIError as e:
-            logger.error(f"✗ Erro ao buscar grupos ativos: {e}")
-            return []
+        logger.info(f"✓ {len(groups)} grupos ativos encontrados no Supabase")
+        return groups
 
     def get_newest_group(self, nicho_id: Optional[str] = None) -> Optional[WhatsAppGroup]:
         """
@@ -112,30 +134,69 @@ class SupabaseClient:
             nicho_id: restringe a um nicho. None devolve o mais novo global.
 
         Returns:
-            Grupo mais novo ou None
+            Grupo mais novo, ou None quando o nicho realmente não tem grupo
+            ativo. Falha de consulta LEVANTA — quem chama decide criar grupo a
+            partir desse None, então devolvê-lo por erro de rede fabrica grupo.
         """
-        try:
-            query = (
-                self.client.table(self.table_name)
-                .select("*")
-                .eq("status", "ativo")
-            )
-            if nicho_id:
-                query = query.eq("nicho_id", nicho_id)
+        query = (
+            self.client.table(self.table_name)
+            .select("*")
+            .eq("status", "ativo")
+        )
+        if nicho_id:
+            query = query.eq("nicho_id", nicho_id)
 
-            response = query.order("created_at", desc=True).limit(1).execute()
+        response = query.order("created_at", desc=True).limit(1).execute()
 
-            if response.data:
-                group = _map_group(response.data[0])
-                logger.info(f"✓ Grupo mais novo: {group.name} ({group.member_count} membros)")
-                return group
+        if response.data:
+            group = _map_group(response.data[0])
+            logger.info(f"✓ Grupo mais novo: {group.name} ({group.member_count} membros)")
+            return group
 
-            logger.warning("⚠ Nenhum grupo ativo encontrado")
-            return None
+        logger.warning("⚠ Nenhum grupo ativo encontrado")
+        return None
 
-        except APIError as e:
-            logger.error(f"✗ Erro ao buscar grupo mais novo: {e}")
-            return None
+    def get_nicho_group_stats(self, nicho_id: str) -> dict:
+        """
+        Fatos sobre a cadeia de grupos de um nicho, considerando QUALQUER status.
+
+        Lê arquivados de propósito: a numeração precisa continuar de onde parou
+        (o `geral` já foi até #023) e o cooldown precisa enxergar um grupo criado
+        há pouco mesmo que alguém já o tenha arquivado.
+
+        Returns:
+            {"total": int, "max_numero": int, "ultimo_created_at": datetime|None}
+
+        Levanta em caso de falha de consulta — `total: 0` só sai daqui quando o
+        nicho está de fato vazio.
+        """
+        response = (
+            self.client.table(self.table_name)
+            .select("subject, created_at")
+            .eq("nicho_id", nicho_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        rows = response.data or []
+
+        numeros = [n for n in (parse_group_number(r.get("subject")) for r in rows) if n]
+        ultimo = rows[0].get("created_at") if rows else None
+
+        if isinstance(ultimo, str):
+            # PostgREST devolve ISO 8601; `Z` só é aceito por fromisoformat no 3.11+
+            ultimo = datetime.fromisoformat(ultimo.replace("Z", "+00:00"))
+
+        stats = {
+            "total": len(rows),
+            "max_numero": max(numeros) if numeros else 0,
+            "ultimo_created_at": ultimo,
+        }
+        logger.info(
+            f"✓ Cadeia do nicho {nicho_id}: {stats['total']} grupo(s), "
+            f"maior número #{stats['max_numero']:03d}"
+        )
+        return stats
 
     def get_best_group_for_redirect(
         self, max_members: int, nicho_id: Optional[str] = None
@@ -148,37 +209,34 @@ class SupabaseClient:
             nicho_id: restringe a um nicho. None considera todos.
 
         Returns:
-            Melhor grupo para receber novo lead ou None
+            Melhor grupo para receber novo lead, ou None quando nenhum grupo
+            está abaixo do limite. Falha de consulta levanta — esse None também
+            vira "criar grupo novo" em `get_best_group_for_lead`.
         """
-        try:
-            # Antes filtrava por is_active/member_count, colunas de uma tabela
-            # que não existe neste banco — a função falhava em toda chamada.
-            # controle_grupos usa status/membros_atuais.
-            query = (
-                self.client.table(self.table_name)
-                .select("*")
-                .eq("status", "ativo")
-                .lt("membros_atuais", max_members)
+        # Antes filtrava por is_active/member_count, colunas de uma tabela
+        # que não existe neste banco — a função falhava em toda chamada.
+        # controle_grupos usa status/membros_atuais.
+        query = (
+            self.client.table(self.table_name)
+            .select("*")
+            .eq("status", "ativo")
+            .lt("membros_atuais", max_members)
+        )
+        if nicho_id:
+            query = query.eq("nicho_id", nicho_id)
+
+        response = query.order("membros_atuais", desc=False).limit(1).execute()
+
+        if response.data:
+            group = _map_group(response.data[0])
+            logger.info(
+                f"✓ Melhor grupo para redirect: {group.name} "
+                f"({group.member_count}/{max_members} membros)"
             )
-            if nicho_id:
-                query = query.eq("nicho_id", nicho_id)
+            return group
 
-            response = query.order("membros_atuais", desc=False).limit(1).execute()
-
-            if response.data:
-                group = _map_group(response.data[0])
-                logger.info(
-                    f"✓ Melhor grupo para redirect: {group.name} "
-                    f"({group.member_count}/{max_members} membros)"
-                )
-                return group
-
-            logger.warning(f"⚠ Nenhum grupo disponível com menos de {max_members} membros")
-            return None
-
-        except APIError as e:
-            logger.error(f"✗ Erro ao buscar melhor grupo: {e}")
-            return None
+        logger.warning(f"⚠ Nenhum grupo disponível com menos de {max_members} membros")
+        return None
 
     def create_group(
         self, group: WhatsAppGroup, nicho_id: Optional[str] = None

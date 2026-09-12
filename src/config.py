@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     scale_out_threshold: int = Field(950, alias="SCALE_OUT_THRESHOLD")
     whatsapp_max_capacity: int = Field(1000, alias="WHATSAPP_MAX_CAPACITY")
 
+    # Circuit breaker: um nicho não ganha dois grupos dentro desta janela.
+    # Um grupo leva semanas para encher 950 membros, então qualquer criação em
+    # sequência é bug, não demanda. Em 2026-09-12 uma falha de leitura criou 8
+    # grupos em 9h; com este limite teriam sido no máximo 9 — e, com o guard de
+    # dupla confirmação, nenhum. É a rede de segurança, não a correção.
+    group_create_cooldown_minutes: int = Field(60, alias="GROUP_CREATE_COOLDOWN_MINUTES")
+
     # Monitor Configuration
     monitor_check_interval: int = Field(60, alias="MONITOR_CHECK_INTERVAL")
     daily_sync_interval: int = Field(24, alias="DAILY_SYNC_INTERVAL")

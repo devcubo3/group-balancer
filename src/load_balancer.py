@@ -112,14 +112,21 @@ class LoadBalancer:
         """
         nicho_id = nicho.id if nicho else None
 
-        # Numeração é por nicho, não global
-        if group_number is None:
-            active_groups = self.db.get_active_groups(nicho_id)
-            group_number = len(active_groups) + 1
+        # Numeração é por nicho e continua do maior número já usado na cadeia,
+        # inclusive arquivados. Contar grupos ativos (o que se fazia antes) volta
+        # a numerar do começo assim que um grupo antigo é arquivado.
+        if group_number is None and nicho_id:
+            group_number = self.db.get_nicho_group_stats(nicho_id)["max_numero"] + 1
 
         # Nome padrão carrega a identidade do nicho, para os grupos serem
         # distinguíveis na lista do WhatsApp: "Caramelo Bebê #002", não "Grupo 2"
         if not group_name:
+            if group_number is None:
+                logger.error(
+                    "✗ Sem nicho e sem --group-number não há como numerar o grupo "
+                    "sem arriscar repetir um número da cadeia"
+                )
+                return None
             prefixo = nicho.prefixo_grupo() if nicho else "Caramelo Ofertas"
             group_name = f"{prefixo} #{group_number:03d}"
 
@@ -290,38 +297,20 @@ class LoadBalancer:
         return stats
 
     def _save_api_logs(self):
-        """Salva os logs de API acumulados no banco de dados."""
+        """
+        Salva os logs de chamadas à API acumulados no banco de dados.
+
+        Falha de gravação de log nunca derruba a operação que a gerou — mas o
+        cache é limpo de qualquer jeito, senão os logs se acumulam em memória.
+        """
         if not self.whatsapp.api_logs:
             return
-        
+
         try:
             saved = self.db.save_api_call_logs_bulk(self.whatsapp.api_logs)
             if saved > 0:
                 logger.debug(f"✓ {saved} logs de API salvos no banco")
-            # Limpa o cache de logs
-            self.whatsapp.api_logs.clear()
         except Exception as e:
-            # Ignora erros de salvamento de logs (tabela pode não existir ainda)
             logger.debug(f"Logs de API não foram salvos: {e}")
+        finally:
             self.whatsapp.api_logs.clear()
-
-
-        # Salva logs de API acumulados
-        self._save_api_logs()
-
-        return stats
-
-    def _save_api_logs(self):
-        """
-        Salva todos os logs de chamadas API acumulados no banco de dados.
-        """
-        if not self.whatsapp.api_logs:
-            return
-            
-        saved_count = self.db.save_api_call_logs_bulk(self.whatsapp.api_logs)
-        
-        if saved_count > 0:
-            logger.debug(f"✓ {saved_count} logs de API salvos no banco")
-        
-        # Limpa a lista de logs
-        self.whatsapp.api_logs.clear()
