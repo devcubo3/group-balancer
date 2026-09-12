@@ -231,6 +231,40 @@ Não existe coluna `updated_at`.
 - controle_grupos_nicho_idx (nicho_id, status, ordem_sequencial)
 ```
 
+## Painel de grupos
+
+`python main.py monitor` sobe, além do loop, um servidor HTTP numa thread daemon
+(`src/painel_web.py`) servindo `painel/index.html` na `PAINEL_PORT` (padrão 8080).
+
+Fica no mesmo processo de propósito: o painel mostra exatamente o que este loop
+escreve, e um painel que some quando o monitor cai é um sinal honesto, não um
+defeito. Separá-lo em outro deploy criaria duas coisas para manter no ar.
+
+O servidor não consulta o banco — ele só injeta três valores no HTML em tempo de
+resposta e o navegador busca o resto direto do PostgREST:
+
+| Injetado | Por quê |
+|---|---|
+| `SUPABASE_URL` / `SUPABASE_KEY` | para a chave não ficar hardcoded no repositório |
+| `SCALE_OUT_THRESHOLD` | para a marca no medidor ser o gatilho real deste deploy |
+
+Os dados vêm de três views (`migrations/002_views_painel.sql`):
+`painel_grupos`, `painel_fluxo_diario` e `painel_saude_monitor`. O cálculo de
+entradas/saídas precisa de `lag()` sobre a série de `member_count`, que o
+PostgREST não expressa — daí as views em vez de consulta direta.
+
+**Entradas e saídas são separadas, nunca só o saldo.** Um grupo com 22 entradas e
+11 saídas não é a mesma coisa que um com 11 entradas e nenhuma saída, e o saldo
+sozinho apresenta os dois como "+11".
+
+O painel abre pela faixa de saúde do monitor porque, se o loop para, todo número
+abaixo congela sem avisar — foi assim que o bug de 2026-09-12 passou horas
+despercebido.
+
+`PAINEL_TOKEN` vazio deixa o painel aberto a quem souber a URL; ele expõe links
+de convite dos grupos e a `SUPABASE_KEY` ao navegador. Com o token preenchido,
+exige `?t=<token>`.
+
 ## Segurança e Rate Limiting
 
 ### Rate Limiting

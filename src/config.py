@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     api_timeout: int = Field(30, alias="API_TIMEOUT")
     daily_monitor_test_interval: int = Field(3, alias="DAILY_MONITOR_TEST_INTERVAL")
 
+    # Painel de grupos (servido pelo proprio processo do monitor)
+    painel_port: int = Field(8080, alias="PAINEL_PORT")
+    # Vazio = painel aberto a quem tiver a URL. Preenchido, exige ?t=<token>.
+    painel_token: str = Field("", alias="PAINEL_TOKEN")
+
     # Logging
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     log_file: str = Field("logs/monitor.log", alias="LOG_FILE")

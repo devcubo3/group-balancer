@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grupos Caramelo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  /* ---- tokens: paleta clara completa aqui; os blocos abaixo so redefinem ---- */
+  :root {
+    --ground:   #F6F6F3;
+    --surface:  #FFFFFF;
+    --sunken:   #EFEFEB;
+    --ink:      #191C19;
+    --ink-2:    #40453F;
+    --muted:    #676C66;
+    --line:     #E3E4DF;
+    --line-2:   #CFD1CA;
+
+    --accent:   #B0741D;   /* ambar caramelo - so no medidor de capacidade */
+    --accent-w: #F3E7D2;
+
+    --entra:    #0B9273;   /* serie: entradas  (validado, CVD dE 9.1) */
+    --sai:      #B4472C;   /* serie: saidas */
+    --entra-w:  #E2F2EC;
+    --sai-w:    #F7E7E2;
+
+    --st-ok:    #2E6B4F;   /* status: passos proprios, nunca a cor das series */
+    --st-warn:  #8F5C13;
+    --st-crit:  #9B2F1C;
+    --st-ok-bg:   #E4EFE8;
+    --st-warn-bg: #F6EBD8;
+    --st-crit-bg: #F7E3DE;
+
+    --shadow: 0 1px 2px rgba(25,28,25,.06), 0 1px 8px rgba(25,28,25,.04);
+    --r: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #141714;
+      --surface:  #1D201D;
+      --sunken:   #232723;
+      --ink:      #E7EAE4;
+      --ink-2:    #BCC2B9;
+      --muted:    #8D938B;
+      --line:     #2D312C;
+      --line-2:   #3C413A;
+
+      --accent:   #D69B3F;
+      --accent-w: #3A2E17;
+
+      --entra:    #2FA37A;  /* validado sobre #1D201D, CVD dE 8.7 */
+      --sai:      #D9603A;
+      --entra-w:  #1B2E27;
+      --sai-w:    #33211B;
+
+      --st-ok:    #6FBF95;
+      --st-warn:  #D69B3F;
+      --st-crit:  #E0705A;
+      --st-ok-bg:   #1B2E23;
+      --st-warn-bg: #332815;
+      --st-crit-bg: #351F1A;
+
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 1px 10px rgba(0,0,0,.25);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:   #141714;
+    --surface:  #1D201D;
+    --sunken:   #232723;
+    --ink:      #E7EAE4;
+    --ink-2:    #BCC2B9;
+    --muted:    #8D938B;
+    --line:     #2D312C;
+    --line-2:   #3C413A;
+
+    --accent:   #D69B3F;
+    --accent-w: #3A2E17;
+
+    --entra:    #2FA37A;
+    --sai:      #D9603A;
+    --entra-w:  #1B2E27;
+    --sai-w:    #33211B;
+
+    --st-ok:    #6FBF95;
+    --st-warn:  #D69B3F;
+    --st-crit:  #E0705A;
+    --st-ok-bg:   #1B2E23;
+    --st-warn-bg: #332815;
+    --st-crit-bg: #351F1A;
+
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 1px 10px rgba(0,0,0,.25);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding-inline: 20px;
+    padding-block: 28px 56px;
+  }
+
+  .mono { font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ---- cabecalho ---- */
+  header.top { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 20px; margin-bottom: 6px; }
+  h1 {
+    font-size: clamp(26px, 4.2vw, 34px);
+    font-weight: 700;
+    letter-spacing: -.02em;
+    margin: 2px 0 0;
+    text-wrap: balance;
+  }
+  .sub { color: var(--muted); font-size: 14px; margin: 4px 0 0; max-width: 62ch; }
+  .top-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+  button.ghost {
+    font: inherit; font-size: 13px;
+    color: var(--ink-2);
+    background: var(--surface);
+    border: 1px solid var(--line-2);
+    border-radius: 7px;
+    padding: 6px 11px;
+    cursor: pointer;
+  }
+  button.ghost:hover { border-color: var(--muted); }
+  :is(button, a, select, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- faixa de saude do monitor ---- */
+  .health {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+    margin-top: 20px; padding: 13px 16px;
+    border-radius: var(--r);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--line-2);
+    background: var(--surface);
+  }
+  .health[data-state="ok"]   { border-left-color: var(--st-ok); }
+  .health[data-state="warn"] { border-left-color: var(--st-warn); }
+  .health[data-state="crit"] { border-left-color: var(--st-crit); }
+  .health-msg { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .health-detail { color: var(--muted); font-size: 13px; }
+  .health-facts { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    font-size: 11.5px; font-weight: 500;
+    padding: 3px 9px; border-radius: 999px;
+    background: var(--sunken); color: var(--ink-2);
+    border: 1px solid var(--line);
+  }
+  .pill[data-tone="ok"]   { background: var(--st-ok-bg);   color: var(--st-ok);   border-color: transparent; }
+  .pill[data-tone="warn"] { background: var(--st-warn-bg); color: var(--st-warn); border-color: transparent; }
+  .pill[data-tone="crit"] { background: var(--st-crit-bg); color: var(--st-crit); border-color: transparent; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+
+  /* ---- tiles de resumo ---- */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-top: 18px;
+           background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+  .tile { background: var(--surface); padding: 15px 16px 16px; }
+  .tile .n {
+    font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    font-size: 27px; font-weight: 600; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums; line-height: 1.15;
+    display: block; margin-top: 3px;
+  }
+  .tile .foot { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .tile .n.up   { color: var(--entra); }
+  .tile .n.down { color: var(--sai); }
+
+  /* ---- controles ---- */
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 26px 0 14px; }
+  .seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 7px; overflow: hidden; background: var(--surface); }
+  .seg button {
+    font: inherit; font-size: 13px; font-weight: 500;
+    padding: 6px 13px; border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+  .check { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--ink-2); cursor: pointer; }
+
+  .legend { margin-left: auto; display: flex; gap: 14px; align-items: center; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+
+  /* ---- painel por grupo ---- */
+  .group {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    box-shadow: var(--shadow);
+    padding: 18px 18px 12px;
+    margin-bottom: 14px;
+  }
+  .group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+  .group-name { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+  .group.arquivado { opacity: .72; }
+  .group.arquivado .group-name { text-decoration: line-through; text-decoration-color: var(--line-2); }
+
+  /* medidor de capacidade: o teto de 1000 do WhatsApp e a razao de existir do sistema */
+  .cap { margin-top: 14px; }
+  .cap-nums {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--muted);
+  }
+  .cap-nums b { color: var(--ink); font-size: 15px; font-weight: 600; }
+  .cap-track {
+    position: relative; height: 9px; margin-top: 6px;
+    background: var(--sunken); border-radius: 5px; overflow: hidden;
+  }
+  .cap-fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 5px; min-width: 3px; }
+  .cap-mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--line-2); }
+  .cap-legend { margin-top: 5px; font-size: 11.5px; color: var(--muted); }
+
+  .chart-box { margin-top: 16px; position: relative; }
+  .chart-box svg { display: block; width: 100%; height: auto; }
+  .empty { color: var(--muted); font-size: 13.5px; padding: 22px 0 14px; }
+
+  .tip {
+    position: absolute; z-index: 5; pointer-events: none; opacity: 0;
+    transition: opacity .1s;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line-2); border-radius: 8px;
+    box-shadow: var(--shadow);
+    padding: 8px 10px; min-width: 150px;
+    font-size: 12.5px;
+  }
+  .tip.on { opacity: 1; }
+  .tip .tip-d { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 11px; color: var(--muted);
+                letter-spacing: .04em; text-transform: uppercase; }
+  .tip-row { display: flex; justify-content: space-between; gap: 14px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .tip-row .k { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+  .tip-row .v { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-weight: 600; }
+
+  /* ---- tabela ---- */
+  h2 { font-size: 19px; font-weight: 600; letter-spacing: -.01em; margin: 34px 0 4px; }
+  .table-note { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; }
+  th, td { padding: 9px 14px; text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  thead th {
+    font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    font-size: 10.5px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--surface);
+  }
+  tbody td { border-bottom: 1px solid var(--line); font-size: 13.5px; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  td.e { color: var(--entra); }
+  td.s { color: var(--sai); }
+  td.z { color: var(--muted); }
+  .day-cell { color: var(--muted); font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 12.5px; }
+
+  footer { margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line);
+           color: var(--muted); font-size: 12.5px; }
+  footer p { margin: 0 0 5px; max-width: 78ch; }
+  footer code { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 11.5px;
+                background: var(--sunken); padding: 1px 5px; border-radius: 4px; }
+
+  .err { background: var(--st-crit-bg); color: var(--st-crit); border: 1px solid transparent;
+         border-radius: var(--r); padding: 14px 16px; margin-top: 18px; font-size: 14px; }
+
+  @media (max-width: 720px) {
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+    .legend { margin-left: 0; width: 100%; }
+    .health-facts { margin-left: 0; width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  }
+</style>
+<style>html{color-scheme:light dark}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="eyebrow">Caramelo &middot; capacidade e churn</div>
+      <h1>Grupos Caramelo</h1>
+    </div>
+    <div class="top-right">
+      <button class="ghost" id="btn-refresh" type="button">Atualizar</button>
+      <button class="ghost" id="btn-theme" type="button" aria-label="Alternar tema">Tema</button>
+    </div>
+  </header>
+  <p class="sub">Quantos grupos existem, quanto falta para cada um bater o teto de membros do WhatsApp, e quantas pessoas entram e saem por dia.</p>
+
+  <div class="health" id="health" data-state="">
+    <div class="health-msg"><span class="dot" style="color:var(--muted)"></span><span id="health-msg">Carregando&hellip;</span></div>
+    <div class="health-detail" id="health-detail"></div>
+    <div class="health-facts" id="health-facts"></div>
+  </div>
+
+  <div id="erro"></div>
+
+  <div class="tiles" id="tiles">
+    <div class="tile"><span class="eyebrow">Grupos ativos</span><span class="n mono" id="t-grupos">&mdash;</span><span class="foot" id="t-grupos-f">&nbsp;</span></div>
+    <div class="tile"><span class="eyebrow">Membros</span><span class="n mono" id="t-membros">&mdash;</span><span class="foot" id="t-membros-f">&nbsp;</span></div>
+    <div class="tile"><span class="eyebrow">Entradas hoje</span><span class="n mono up" id="t-entra">&mdash;</span><span class="foot" id="t-entra-f">&nbsp;</span></div>
+    <div class="tile"><span class="eyebrow">Saídas hoje</span><span class="n mono down" id="t-sai">&mdash;</span><span class="foot" id="t-sai-f">&nbsp;</span></div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Período">
+      <button type="button" data-dias="7" aria-pressed="false">7 dias</button>
+      <button type="button" data-dias="30" aria-pressed="true">30 dias</button>
+      <button type="button" data-dias="90" aria-pressed="false">90 dias</button>
+    </div>
+    <label class="check"><input type="checkbox" id="ck-arq"> Incluir arquivados</label>
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--entra)"></i> Entradas</span>
+      <span><i class="swatch" style="background:var(--sai)"></i> Saídas</span>
+    </div>
+  </div>
+
+  <div id="grupos"><p class="empty">Carregando grupos&hellip;</p></div>
+
+  <h2>Dia a dia</h2>
+  <p class="table-note" id="tab-note">Os mesmos números dos gráficos, em tabela.</p>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th>Dia</th><th>Grupo</th><th>Entradas</th><th>Saídas</th><th>Saldo</th><th>Membros no fim</th></tr>
+      </thead>
+      <tbody id="tbody"><tr><td colspan="6" class="day-cell">Carregando&hellip;</td></tr></tbody>
+    </table>
+  </div>
+
+  <footer>
+    <p>Entradas e saídas são derivadas da série de contagem de membros em <code>monitor_logs</code>, amostrada a cada 60s pelo <code>group-balancer</code>. A soma das variações positivas entre amostras consecutivas é entrada; das negativas, saída. Duas pessoas que entram e saem no intervalo de um mesmo minuto não aparecem.</p>
+    <p>O medidor marca o teto de <code>capacidade_max</code> do grupo e o gatilho de scale-out em <code>SCALE_OUT_THRESHOLD</code>, lido do mesmo .env que o monitor usa.</p>
+    <p>Se o monitor para, tudo nesta página congela sem avisar &mdash; por isso a faixa de saúde vem antes de qualquer número.</p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SUPABASE_URL = "__SUPABASE_URL__";
+  var ANON = "__SUPABASE_KEY__";
+  var SCALE_OUT = Number("__SCALE_OUT__") || 950;
+
+  var state = { dias: 30, arquivados: false, grupos: [], fluxo: [], saude: null, topo: 1 };
+
+  function api(path) {
+    return fetch(SUPABASE_URL + "/rest/v1/" + path, {
+      headers: { apikey: ANON, Authorization: "Bearer " + ANON, Accept: "application/json" }
+    }).then(function (r) {
+      if (!r.ok) throw new Error(path.split("?")[0] + " respondeu " + r.status);
+      return r.json();
+    });
+  }
+
+  function hojeISO() { return new Date().toISOString().slice(0, 10); }
+  function diasAtrasISO(n) {
+    var d = new Date(); d.setDate(d.getDate() - n);
+    return d.toISOString().slice(0, 10);
+  }
+  function fmtDiaCurto(iso) {
+    var p = iso.split("-");
+    return p[2] + "/" + p[1];
+  }
+  function plural(n, um, muitos) { return n === 1 ? um : muitos; }
+
+  // ---------- saude do monitor ----------
+  function renderSaude() {
+    var el = document.getElementById("health");
+    var msg = document.getElementById("health-msg");
+    var det = document.getElementById("health-detail");
+    var facts = document.getElementById("health-facts");
+    var s = state.saude;
+    if (!s) return;
+
+    var m = s.minutos_desde_ultimo_ciclo;
+    var estado = m == null ? "crit" : m <= 5 ? "ok" : m <= 30 ? "warn" : "crit";
+    if (estado === "ok" && (s.erros_24h > 0 || s.grupos_criados_24h > 0)) estado = "warn";
+
+    var texto;
+    if (m == null) texto = "Monitor sem registro";
+    else if (m <= 5) texto = "Monitor rodando";
+    else if (m <= 30) texto = "Monitor atrasado";
+    else if (m < 1440) texto = "Monitor parado há " + Math.round(m / 60) + "h";
+    else texto = "Monitor parado há " + Math.round(m / 1440) + " dias";
+
+    el.setAttribute("data-state", estado);
+    msg.parentNode.querySelector(".dot").style.color =
+      estado === "ok" ? "var(--st-ok)" : estado === "warn" ? "var(--st-warn)" : "var(--st-crit)";
+    msg.textContent = texto;
+    det.textContent = m == null ? "" :
+      "último ciclo " + (m < 1 ? "há menos de 1 min" : "há " + m + " min") + " · " + s.ciclos_24h + " ciclos em 24h";
+
+    facts.innerHTML = "";
+    function pill(tone, txt) {
+      var p = document.createElement("span");
+      p.className = "pill"; p.setAttribute("data-tone", tone);
+      var d = document.createElement("i"); d.className = "dot";
+      p.appendChild(d); p.appendChild(document.createTextNode(txt));
+      facts.appendChild(p);
+    }
+    pill(s.erros_24h > 0 ? "warn" : "ok", s.erros_24h + " " + plural(s.erros_24h, "erro", "erros") + " /24h");
+    pill(s.grupos_criados_24h > 0 ? "warn" : "ok",
+         s.grupos_criados_24h + " " + plural(s.grupos_criados_24h, "grupo criado", "grupos criados") + " /24h");
+  }
+
+  // ---------- tiles ----------
+  function renderTiles() {
+    var ativos = state.grupos.filter(function (g) { return g.status === "ativo"; });
+    var membros = ativos.reduce(function (a, g) { return a + (g.membros_atuais || 0); }, 0);
+    var hoje = hojeISO();
+    var fHoje = state.fluxo.filter(function (f) {
+      return f.dia === hoje && (state.arquivados || f.status_grupo === "ativo");
+    });
+    var ent = fHoje.reduce(function (a, f) { return a + f.entradas; }, 0);
+    var sai = fHoje.reduce(function (a, f) { return a + f.saidas; }, 0);
+
+    var nichos = {};
+    ativos.forEach(function (g) { nichos[g.nicho || "sem nicho"] = true; });
+    var nq = Object.keys(nichos).length;
+
+    document.getElementById("t-grupos").textContent = ativos.length;
+    document.getElementById("t-grupos-f").textContent =
+      "em " + nq + " " + plural(nq, "nicho", "nichos") +
+      (state.grupos.length > ativos.length ? " · " + (state.grupos.length - ativos.length) + " arquivados" : "");
+
+    document.getElementById("t-membros").textContent = membros.toLocaleString("pt-BR");
+    var cap = ativos.reduce(function (a, g) { return a + (g.capacidade_max || 0); }, 0);
+    document.getElementById("t-membros-f").textContent = cap ? "de " + cap.toLocaleString("pt-BR") + " de capacidade" : " ";
+
+    document.getElementById("t-entra").textContent = ent ? "+" + ent : "0";
+    document.getElementById("t-sai").textContent = sai ? "−" + sai : "0";
+    // Rodape das duas lajotas de fluxo: o total do periodo selecionado. Um dia
+    // isolado diz pouco; o acumulado mostra se o grupo cresce ou so gira.
+    var desdeP = diasAtrasISO(state.dias - 1);
+    var noPeriodo = state.fluxo.filter(function (f) {
+      return f.dia >= desdeP && (state.arquivados || f.status_grupo === "ativo");
+    });
+    var entP = noPeriodo.reduce(function (a, f) { return a + f.entradas; }, 0);
+    var saiP = noPeriodo.reduce(function (a, f) { return a + f.saidas; }, 0);
+    var saldoP = entP - saiP;
+    document.getElementById("t-entra-f").textContent = "+" + entP + " em " + state.dias + " dias";
+    document.getElementById("t-sai-f").textContent =
+      "−" + saiP + " em " + state.dias + " dias · saldo " + (saldoP > 0 ? "+" : "") + saldoP;
+  }
+
+  // ---------- grafico de barras divergentes ----------
+  // Entradas acima do eixo, saidas abaixo. O saldo sozinho esconde o churn:
+  // 22 entradas e 11 saidas nao e a mesma coisa que 11 entradas e 0 saidas.
+  function barraPath(x, y, w, h, up) {
+    // canto arredondado so na ponta do dado; a base fica reta, ancorada no eixo
+    var r = Math.min(3, w / 2, h);
+    if (h <= 0.5) return "";
+    if (up) {
+      return "M" + x + "," + (y + h) + "V" + (y + r) +
+             "a" + r + "," + r + " 0 0 1 " + r + ",-" + r +
+             "h" + (w - 2 * r) +
+             "a" + r + "," + r + " 0 0 1 " + r + "," + r +
+             "V" + (y + h) + "Z";
+    }
+    return "M" + x + "," + y + "V" + (y + h - r) +
+           "a" + r + "," + r + " 0 0 0 " + r + "," + r +
+           "h" + (w - 2 * r) +
+           "a" + r + "," + r + " 0 0 0 " + r + ",-" + r +
+           "V" + y + "Z";
+  }
+
+  // Teto do eixo, arredondado para o rotulo ser um numero honesto.
+  function tetoDoEixo(maxV) {
+    var m = Math.max(1, maxV);
+    var step = m <= 5 ? 1 : m <= 20 ? 5 : m <= 50 ? 10 : 25;
+    return Math.ceil(m / step) * step;
+  }
+
+  function desenhaGrafico(box, linhas, largura, topo) {
+    var SVG = "http://www.w3.org/2000/svg";
+    var W = Math.max(280, largura);
+    var padL = 30, padR = 10, padT = 16, padB = 20;
+    var H = 150;
+    var plotW = W - padL - padR;
+    var plotH = H - padT - padB;
+    var mid = padT + plotH / 2;
+    var esc = (plotH / 2) / topo;
+
+    var n = linhas.length;
+    var slot = plotW / n;
+    var bw = Math.max(2, Math.min(18, slot - 2)); // 2px de respiro entre dias
+
+    var svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("width", W);
+    svg.setAttribute("height", H);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label",
+      "Entradas e saídas por dia nos últimos " + n + " dias. Pico de " + topo + " por dia.");
+
+    function el(t, at) {
+      var e = document.createElementNS(SVG, t);
+      for (var k in at) e.setAttribute(k, at[k]);
+      return e;
+    }
+    function txt(x, y, s, cls, anchor) {
+      var t = el("text", { x: x, y: y, "text-anchor": anchor || "middle", fill: "currentColor" });
+      t.setAttribute("font-size", "10");
+      t.setAttribute("font-family", '"IBM Plex Mono", ui-monospace, monospace');
+      t.setAttribute("class", cls || "");
+      t.textContent = s;
+      return t;
+    }
+
+    // grade recessiva: so o teto, o piso e o zero
+    [topo, -topo].forEach(function (v) {
+      var y = mid - v * esc;
+      svg.appendChild(el("line", { x1: padL, x2: W - padR, y1: y, y2: y,
+        stroke: "var(--line)", "stroke-width": 1 }));
+      var lab = txt(padL - 6, y + 3.5, (v > 0 ? "+" : "−") + topo, "", "end");
+      lab.setAttribute("fill", "var(--muted)");
+      svg.appendChild(lab);
+    });
+    var zero = txt(padL - 6, mid + 3.5, "0", "", "end");
+    zero.setAttribute("fill", "var(--muted)");
+    svg.appendChild(zero);
+
+    // barras. Com escala compartilhada entre grupos, um movimento de 1 ao lado
+    // de outro de 30 renderiza sub-pixel: piso de 2px para nao sumir do grafico.
+    function alturaVisivel(v) { return v > 0 ? Math.max(2, v * esc) : 0; }
+    linhas.forEach(function (d, i) {
+      var x = padL + i * slot + (slot - bw) / 2;
+      if (d.entradas > 0) {
+        var he = alturaVisivel(d.entradas);
+        svg.appendChild(el("path", { d: barraPath(x, mid - he, bw, he, true), fill: "var(--entra)" }));
+      }
+      if (d.saidas > 0) {
+        var hs = alturaVisivel(d.saidas);
+        svg.appendChild(el("path", { d: barraPath(x, mid, bw, hs, false), fill: "var(--sai)" }));
+      }
+    });
+
+    // eixo zero por cima das barras, para a base ficar nitida
+    svg.appendChild(el("line", { x1: padL, x2: W - padR, y1: mid, y2: mid,
+      stroke: "var(--line-2)", "stroke-width": 1 }));
+
+    // rotulos de data: primeiro, ultimo e o do meio - nunca um por barra
+    var marcas = n <= 2 ? [0] : [0, Math.floor((n - 1) / 2), n - 1];
+    marcas.forEach(function (i) {
+      var t = txt(padL + i * slot + slot / 2, H - 5, fmtDiaCurto(linhas[i].dia));
+      t.setAttribute("fill", "var(--muted)");
+      if (i === 0) { t.setAttribute("text-anchor", "start"); t.setAttribute("x", padL); }
+      if (i === n - 1) { t.setAttribute("text-anchor", "end"); t.setAttribute("x", W - padR); }
+      svg.appendChild(t);
+    });
+
+    // alvos de hover, mais largos que as barras
+    var tip = box.querySelector(".tip");
+    linhas.forEach(function (d, i) {
+      var hit = el("rect", { x: padL + i * slot, y: padT, width: slot, height: plotH,
+        fill: "transparent", "pointer-events": "all" });
+      hit.addEventListener("mouseenter", function () {
+        tip.innerHTML =
+          '<div class="tip-d">' + d.dia.split("-").reverse().join("/") + "</div>" +
+          '<div class="tip-row"><span class="k"><i class="swatch" style="background:var(--entra)"></i>Entradas</span><span class="v">' + d.entradas + "</span></div>" +
+          '<div class="tip-row"><span class="k"><i class="swatch" style="background:var(--sai)"></i>Saídas</span><span class="v">' + d.saidas + "</span></div>" +
+          '<div class="tip-row"><span class="k">Saldo</span><span class="v">' + (d.saldo > 0 ? "+" : "") + d.saldo + "</span></div>" +
+          '<div class="tip-row"><span class="k">Membros no fim</span><span class="v">' + d.membros_fim_do_dia + "</span></div>";
+        tip.classList.add("on");
+        var cx = (padL + i * slot + slot / 2) / W * box.clientWidth;
+        var lado = cx > box.clientWidth / 2 ? cx - 170 : cx + 12;
+        tip.style.left = Math.max(0, Math.min(box.clientWidth - 165, lado)) + "px";
+        tip.style.top = "4px";
+      });
+      hit.addEventListener("mouseleave", function () { tip.classList.remove("on"); });
+      svg.appendChild(hit);
+    });
+
+    return svg;
+  }
+
+  // ---------- medidor de capacidade ----------
+  function medidor(g) {
+    var cap = g.capacidade_max || 1000;
+    var pct = Math.min(100, (g.membros_atuais / cap) * 100);
+    var falta = Math.max(0, SCALE_OUT - g.membros_atuais);
+    var d = document.createElement("div");
+    d.className = "cap";
+    d.innerHTML =
+      '<div class="cap-nums"><span><b>' + g.membros_atuais.toLocaleString("pt-BR") + "</b> / " + cap.toLocaleString("pt-BR") + " membros</span>" +
+      "<span>" + (falta > 0 ? falta.toLocaleString("pt-BR") + " para o scale-out" : "scale-out atingido") + "</span></div>" +
+      '<div class="cap-track"><div class="cap-fill" style="width:' + pct.toFixed(2) + '%"></div>' +
+      '<div class="cap-mark" style="left:' + ((SCALE_OUT / cap) * 100).toFixed(2) + '%"></div></div>' +
+      '<div class="cap-legend">marca em ' + SCALE_OUT + ' = onde o balancer abre o próximo grupo da cadeia</div>';
+    return d;
+  }
+
+  // ---------- grupos ----------
+  function renderGrupos() {
+    var host = document.getElementById("grupos");
+    host.innerHTML = "";
+    var desde = diasAtrasISO(state.dias - 1);
+
+    var lista = state.grupos.filter(function (g) {
+      return state.arquivados || g.status === "ativo";
+    }).sort(function (a, b) {
+      if (a.status !== b.status) return a.status === "ativo" ? -1 : 1;
+      return (b.membros_atuais || 0) - (a.membros_atuais || 0);
+    });
+
+    if (!lista.length) { host.innerHTML = '<p class="empty">Nenhum grupo para mostrar.</p>'; return; }
+
+    // Escala compartilhada por todos os grupos: e a MESMA medida em grupos
+    // diferentes, entao eixos independentes fariam 1 pessoa saindo de um grupo
+    // parecer o mesmo que 30 saindo de outro. Um grupo parado tem que ler
+    // como parado ao lado de um que se mexe.
+    var picoGlobal = 1;
+    state.grupos.forEach(function (g) {
+      if (!state.arquivados && g.status !== "ativo") return;
+      state.fluxo.forEach(function (f) {
+        if (f.group_id_api === g.group_jid && f.dia >= desde) {
+          picoGlobal = Math.max(picoGlobal, f.entradas, f.saidas);
+        }
+      });
+    });
+    state.topo = tetoDoEixo(picoGlobal);
+
+    lista.forEach(function (g) {
+      var card = document.createElement("div");
+      card.className = "group" + (g.status === "ativo" ? "" : " arquivado");
+
+      var head = document.createElement("div");
+      head.className = "group-head";
+      head.innerHTML =
+        '<span class="group-name">' + g.nome + "</span>" +
+        '<span class="pill">' + (g.nicho || "sem nicho") + "</span>" +
+        (g.status === "ativo" ? "" : '<span class="pill">arquivado</span>');
+      card.appendChild(head);
+      card.appendChild(medidor(g));
+
+      // serie diaria continua: dias sem amostra viram zero, senao o eixo mente
+      var porDia = {};
+      state.fluxo.forEach(function (f) {
+        if (f.group_id_api === g.group_jid && f.dia >= desde) porDia[f.dia] = f;
+      });
+      var linhas = [];
+      for (var i = state.dias - 1; i >= 0; i--) {
+        var iso = diasAtrasISO(i);
+        var f = porDia[iso];
+        linhas.push(f ? f : { dia: iso, entradas: 0, saidas: 0, saldo: 0, membros_fim_do_dia: g.membros_atuais });
+      }
+
+      var temMov = linhas.some(function (d) { return d.entradas || d.saidas; });
+      var box = document.createElement("div");
+      box.className = "chart-box";
+      var tip = document.createElement("div");
+      tip.className = "tip";
+      box.appendChild(tip);
+      card.appendChild(box);
+      host.appendChild(card);
+
+      if (!temMov) {
+        var p = document.createElement("p");
+        p.className = "empty";
+        p.textContent = "Sem entradas nem saídas registradas nos últimos " + state.dias + " dias.";
+        box.appendChild(p);
+      } else {
+        box.appendChild(desenhaGrafico(box, linhas, box.clientWidth || 640, state.topo));
+        box._linhas = linhas;
+      }
+    });
+  }
+
+  function redesenhaGraficos() {
+    document.querySelectorAll(".chart-box").forEach(function (box) {
+      if (!box._linhas) return;
+      var velho = box.querySelector("svg");
+      if (velho) velho.remove();
+      box.appendChild(desenhaGrafico(box, box._linhas, box.clientWidth || 640, state.topo));
+    });
+  }
+
+  // ---------- tabela ----------
+  function renderTabela() {
+    var tb = document.getElementById("tbody");
+    var desde = diasAtrasISO(state.dias - 1);
+    var linhas = state.fluxo.filter(function (f) {
+      return f.dia >= desde && (state.arquivados || f.status_grupo === "ativo") && (f.entradas || f.saidas);
+    }).sort(function (a, b) {
+      return a.dia === b.dia ? a.group_name.localeCompare(b.group_name) : (a.dia < b.dia ? 1 : -1);
+    });
+
+    document.getElementById("tab-note").textContent =
+      linhas.length
+        ? "Os mesmos números dos gráficos. Só dias com movimento, do mais recente para o mais antigo."
+        : "Os mesmos números dos gráficos, em tabela.";
+
+    if (!linhas.length) {
+      tb.innerHTML = '<tr><td colspan="6" class="day-cell">Nenhum movimento no período.</td></tr>';
+      return;
+    }
+
+    tb.innerHTML = linhas.map(function (f) {
+      var sal = f.saldo > 0 ? "+" + f.saldo : String(f.saldo);
+      var salCls = f.saldo > 0 ? "e" : f.saldo < 0 ? "s" : "z";
+      return "<tr>" +
+        '<td class="day-cell">' + f.dia.split("-").reverse().join("/") + "</td>" +
+        "<td>" + f.group_name + "</td>" +
+        '<td class="num ' + (f.entradas ? "e" : "z") + '">' + (f.entradas || "–") + "</td>" +
+        '<td class="num ' + (f.saidas ? "s" : "z") + '">' + (f.saidas || "–") + "</td>" +
+        '<td class="num ' + salCls + '">' + sal + "</td>" +
+        '<td class="num">' + f.membros_fim_do_dia + "</td>" +
+        "</tr>";
+    }).join("");
+  }
+
+  function renderTudo() {
+    renderSaude(); renderTiles(); renderGrupos(); renderTabela();
+  }
+
+  // ---------- carga ----------
+  var carregando = false;
+  function carregar() {
+    if (carregando) return;
+    carregando = true;
+    var btn = document.getElementById("btn-refresh");
+    btn.disabled = true;
+    var desde = diasAtrasISO(90);
+
+    Promise.all([
+      api("painel_saude_monitor?select=*"),
+      api("painel_grupos?select=*&order=nicho.asc,ordem_sequencial.asc"),
+      api("painel_fluxo_diario?select=*&dia=gte." + desde + "&order=dia.desc")
+    ]).then(function (res) {
+      state.saude = res[0][0] || null;
+      state.grupos = res[1] || [];
+      state.fluxo = res[2] || [];
+      document.getElementById("erro").innerHTML = "";
+      renderTudo();
+    }).catch(function (e) {
+      document.getElementById("erro").innerHTML =
+        '<div class="err">Não consegui buscar os dados: ' + e.message +
+        ". Confira se as views do painel ainda existem no Supabase e se a chave continua válida.</div>";
+    }).finally(function () {
+      carregando = false;
+      btn.disabled = false;
+    });
+  }
+
+  // ---------- controles ----------
+  document.querySelectorAll(".seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll(".seg button").forEach(function (o) { o.setAttribute("aria-pressed", "false"); });
+      b.setAttribute("aria-pressed", "true");
+      state.dias = Number(b.dataset.dias);
+      renderTudo();
+    });
+  });
+  document.getElementById("ck-arq").addEventListener("change", function (e) {
+    state.arquivados = e.target.checked;
+    renderTudo();
+  });
+  document.getElementById("btn-refresh").addEventListener("click", carregar);
+  document.getElementById("btn-theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    var atual = r.getAttribute("data-theme");
+    if (!atual) {
+      var escuro = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      r.setAttribute("data-theme", escuro ? "light" : "dark");
+    } else {
+      r.setAttribute("data-theme", atual === "dark" ? "light" : "dark");
+    }
+    redesenhaGraficos();
+  });
+
+  var t;
+  window.addEventListener("resize", function () {
+    clearTimeout(t);
+    t = setTimeout(redesenhaGraficos, 150);
+  });
+
+  carregar();
+  setInterval(carregar, 60000); // mesma cadencia do monitor
+})();
+</script>
+</body>
+</html>

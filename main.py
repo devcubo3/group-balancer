@@ -68,6 +68,13 @@ def main():
             # Executa monitor em loop contínuo
             print("\n🚀 Iniciando Monitor de Grupos...")
             print("   Pressione Ctrl+C para encerrar\n")
+
+            # Painel sobe junto, em thread daemon. Fica no mesmo processo de
+            # propósito: ele mostra o que este loop escreve, e um painel que
+            # some quando o monitor cai é um sinal honesto, não um defeito.
+            from src.painel_web import iniciar_em_thread
+            iniciar_em_thread()
+
             monitor.run_continuous()
 
         elif args.command == "sync":
