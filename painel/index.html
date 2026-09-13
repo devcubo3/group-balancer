@@ -36,6 +36,7 @@
 
     --shadow: 0 1px 2px rgba(25,28,25,.06), 0 1px 8px rgba(25,28,25,.04);
     --r: 10px;
+    --scheme: light; /* icone nativo do calendario acompanha o tema */
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -64,6 +65,7 @@
       --st-crit-bg: #351F1A;
 
       --shadow: 0 1px 2px rgba(0,0,0,.4), 0 1px 10px rgba(0,0,0,.25);
+    --scheme: dark;
     }
   }
   :root[data-theme="dark"] {
@@ -92,6 +94,7 @@
     --st-crit-bg: #351F1A;
 
     --shadow: 0 1px 2px rgba(0,0,0,.4), 0 1px 10px rgba(0,0,0,.25);
+    --scheme: dark;
   }
 
   * { box-sizing: border-box; }
@@ -235,6 +238,18 @@
   .resumo-dia .v.down { color: var(--sai); }
   .resumo-dia .v.flat { color: var(--muted); }
 
+  /* intervalo livre: inputs nativos de data abrem o calendario do sistema em
+     qualquer navegador e no celular, sem biblioteca */
+  .range { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .range input[type="date"] {
+    font: inherit; font-size: 13px; color: var(--ink);
+    background: var(--surface); border: 1px solid var(--line-2); border-radius: 7px;
+    padding: 5px 8px; color-scheme: var(--scheme);
+    font-variant-numeric: tabular-nums;
+  }
+  .range input[type="date"]:hover { border-color: var(--muted); }
+  .resumo-dia .nota { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 13px; }
+
   .legend { margin-left: auto; display: flex; gap: 14px; align-items: center; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
   .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
@@ -354,16 +369,23 @@
   <div class="tiles" id="tiles">
     <div class="tile"><span class="eyebrow">Grupos ativos</span><span class="n mono" id="t-grupos">&mdash;</span><span class="foot" id="t-grupos-f">&nbsp;</span></div>
     <div class="tile"><span class="eyebrow">Membros</span><span class="n mono" id="t-membros">&mdash;</span><span class="foot" id="t-membros-f">&nbsp;</span></div>
-    <div class="tile"><span class="eyebrow">Entradas hoje</span><span class="n mono up" id="t-entra">&mdash;</span><span class="foot" id="t-entra-f">&nbsp;</span></div>
-    <div class="tile"><span class="eyebrow">Saídas hoje</span><span class="n mono down" id="t-sai">&mdash;</span><span class="foot" id="t-sai-f">&nbsp;</span></div>
+    <div class="tile"><span class="eyebrow" id="t-entra-l">Entradas</span><span class="n mono up" id="t-entra">&mdash;</span><span class="foot" id="t-entra-f">&nbsp;</span></div>
+    <div class="tile"><span class="eyebrow" id="t-sai-l">Saídas</span><span class="n mono down" id="t-sai">&mdash;</span><span class="foot" id="t-sai-f">&nbsp;</span></div>
   </div>
 
   <div class="controls">
-    <div class="seg" role="group" aria-label="Período">
-      <button type="button" data-dias="1" aria-pressed="false">Hoje</button>
-      <button type="button" data-dias="7" aria-pressed="false">7 dias</button>
-      <button type="button" data-dias="30" aria-pressed="true">30 dias</button>
-      <button type="button" data-dias="90" aria-pressed="false">90 dias</button>
+    <div class="seg" role="group" aria-label="Atalhos de período">
+      <button type="button" data-preset="hoje" aria-pressed="false">Hoje</button>
+      <button type="button" data-preset="ontem" aria-pressed="false">Ontem</button>
+      <button type="button" data-preset="7" aria-pressed="false">7 dias</button>
+      <button type="button" data-preset="30" aria-pressed="true">30 dias</button>
+      <button type="button" data-preset="90" aria-pressed="false">90 dias</button>
+    </div>
+    <div class="range" role="group" aria-label="Intervalo de datas">
+      <label for="dt-de">De</label>
+      <input type="date" id="dt-de">
+      <label for="dt-ate">até</label>
+      <input type="date" id="dt-ate">
     </div>
     <label class="check"><input type="checkbox" id="ck-arq"> Incluir arquivados</label>
     <div class="legend">
@@ -402,7 +424,7 @@
   var ANON = "__SUPABASE_KEY__";
   var SCALE_OUT = Number("__SCALE_OUT__") || 950;
 
-  var state = { dias: 30, arquivados: false, grupos: [], fluxo: [], saude: null, topo: 1, sel: {} };
+  var state = { preset: "30", de: null, ate: null, arquivados: false, grupos: [], fluxo: [], saude: null, topo: 1, sel: {} };
   function temSelecao() { return Object.keys(state.sel).length > 0; }
 
   function api(path) {
@@ -414,20 +436,87 @@
     });
   }
 
-  function hojeISO() { return new Date().toISOString().slice(0, 10); }
-  function diasAtrasISO(n) {
-    var d = new Date(); d.setDate(d.getDate() - n);
-    return d.toISOString().slice(0, 10);
+  // Datas sao strings ISO (AAAA-MM-DD) no fuso de Sao Paulo - o mesmo corte da
+  // view painel_fluxo_diario. As contas de dia rodam em UTC puro, sem horario
+  // local, para o fuso do navegador nao pular nem repetir dias.
+  var FUSO = "America/Sao_Paulo";
+  var JANELA = 90; // dias de historico: a janela da view e a retencao de monitor_logs
+
+  var fmtPartes = new Intl.DateTimeFormat("en-US", { timeZone: FUSO, year: "numeric", month: "2-digit", day: "2-digit" });
+  function hojeISO() {
+    var p = {};
+    fmtPartes.formatToParts(new Date()).forEach(function (x) { p[x.type] = x.value; });
+    return p.year + "-" + p.month + "-" + p.day;
   }
+  function isoParaUTC(iso) { var p = iso.split("-"); return Date.UTC(+p[0], +p[1] - 1, +p[2]); }
+  function somaDias(iso, n) { return new Date(isoParaUTC(iso) + n * 86400000).toISOString().slice(0, 10); }
+  function diasEntre(de, ate) { return Math.round((isoParaUTC(ate) - isoParaUTC(de)) / 86400000) + 1; }
+  function limiteMin() { return somaDias(hojeISO(), -(JANELA - 1)); }
+
   function fmtDiaCurto(iso) {
     var p = iso.split("-");
     return p[2] + "/" + p[1];
   }
+  var fmtSemana = new Intl.DateTimeFormat("pt-BR", { weekday: "long", timeZone: "UTC" });
+  function diaDaSemana(iso) { return fmtSemana.format(new Date(isoParaUTC(iso))); }
   function plural(n, um, muitos) { return n === 1 ? um : muitos; }
 
-  // "Hoje" e um dia so: falar "em 1 dias" fica errado e "em 1 dia" fica esquisito.
+  // ---------- periodo ----------
+  // O periodo e sempre um intervalo fechado [de, ate]. Os atalhos so preenchem
+  // o intervalo; o calendario edita o mesmo intervalo. Um dia = de igual a ate.
+  function aplicaPreset(p) {
+    var hoje = hojeISO();
+    state.preset = p;
+    if (p === "hoje") { state.de = state.ate = hoje; }
+    else if (p === "ontem") { state.de = state.ate = somaDias(hoje, -1); }
+    else { state.ate = hoje; state.de = somaDias(hoje, -(Number(p) - 1)); }
+  }
+
+  // Um intervalo escolhido no calendario que coincide com um atalho acende o
+  // atalho - e passa a acompanhar a virada do dia como ele.
+  function presetDoIntervalo() {
+    var hoje = hojeISO(), ontem = somaDias(hoje, -1);
+    if (state.de === hoje && state.ate === hoje) return "hoje";
+    if (state.de === ontem && state.ate === ontem) return "ontem";
+    if (state.ate === hoje) {
+      var n = diasEntre(state.de, state.ate);
+      if (n === 7 || n === 30 || n === 90) return String(n);
+    }
+    return null;
+  }
+
+  function nDias() { return diasEntre(state.de, state.ate); }
+  function umDia() { return state.de === state.ate; }
+
+  // "hoje", "ontem", "em 05/09", "em 7 dias", "de 03/09 a 10/09" - nunca "em 1 dias".
   function rotuloPeriodo() {
-    return state.dias === 1 ? "hoje" : "em " + state.dias + " dias";
+    var hoje = hojeISO();
+    if (umDia()) {
+      if (state.de === hoje) return "hoje";
+      if (state.de === somaDias(hoje, -1)) return "ontem";
+      return "em " + fmtDiaCurto(state.de);
+    }
+    if (state.ate === hoje) return "em " + nDias() + " dias";
+    return "de " + fmtDiaCurto(state.de) + " a " + fmtDiaCurto(state.ate);
+  }
+
+  // Versao curta para o rotulo das lajotas: "hoje", "ontem", "05/09", "7 dias", "03/09-10/09".
+  function rotuloCurto() {
+    if (umDia()) return rotuloPeriodo().replace(/^em /, "");
+    if (state.ate === hojeISO()) return nDias() + " dias";
+    return fmtDiaCurto(state.de) + "\u2013" + fmtDiaCurto(state.ate);
+  }
+
+  function syncControles() {
+    var de = document.getElementById("dt-de");
+    var ate = document.getElementById("dt-ate");
+    var min = limiteMin(), max = hojeISO();
+    [de, ate].forEach(function (el) { el.min = min; el.max = max; });
+    de.value = state.de;
+    ate.value = state.ate;
+    document.querySelectorAll(".seg button").forEach(function (b) {
+      b.setAttribute("aria-pressed", b.dataset.preset === state.preset ? "true" : "false");
+    });
   }
 
   // Grupos que o painel deve mostrar agora: o filtro de arquivados primeiro,
@@ -439,11 +528,11 @@
     });
   }
 
-  function fluxoVisivel(desde) {
+  function fluxoVisivel(de, ate) {
     var jids = {};
     gruposVisiveis().forEach(function (g) { jids[g.group_jid] = true; });
     return state.fluxo.filter(function (f) {
-      return (!desde || f.dia >= desde) && jids[f.group_id_api];
+      return (!de || f.dia >= de) && (!ate || f.dia <= ate) && jids[f.group_id_api];
     });
   }
 
@@ -543,11 +632,6 @@
     var ativos = visiveis.filter(function (g) { return g.status === "ativo"; });
     var membros = ativos.reduce(function (a, g) { return a + (g.membros_atuais || 0); }, 0);
 
-    var hoje = hojeISO();
-    var fHoje = fluxoVisivel(null).filter(function (f) { return f.dia === hoje; });
-    var ent = fHoje.reduce(function (a, f) { return a + f.entradas; }, 0);
-    var sai = fHoje.reduce(function (a, f) { return a + f.saidas; }, 0);
-
     var nichos = {};
     ativos.forEach(function (g) { nichos[g.nicho || "sem nicho"] = true; });
     var nq = Object.keys(nichos).length;
@@ -555,27 +639,31 @@
 
     document.getElementById("t-grupos").textContent = ativos.length;
     document.getElementById("t-grupos-f").textContent =
-      (temSelecao() ? "filtrado · " : "") +
+      (temSelecao() ? "filtrado \u00b7 " : "") +
       "em " + nq + " " + plural(nq, "nicho", "nichos") +
-      (arquivadosVisiveis > 0 ? " · " + arquivadosVisiveis + " arquivados" : "");
+      (arquivadosVisiveis > 0 ? " \u00b7 " + arquivadosVisiveis + " arquivados" : "");
 
     document.getElementById("t-membros").textContent = membros.toLocaleString("pt-BR");
     var cap = ativos.reduce(function (a, g) { return a + (g.capacidade_max || 0); }, 0);
     document.getElementById("t-membros-f").textContent =
       cap ? "de " + cap.toLocaleString("pt-BR") + " de capacidade" : " ";
 
-    document.getElementById("t-entra").textContent = ent ? "+" + ent : "0";
-    document.getElementById("t-sai").textContent = sai ? "−" + sai : "0";
+    // As lajotas de fluxo seguem o periodo escolhido. Com "Ontem" ou um
+    // intervalo do calendario, destacar o numero de hoje responderia outra pergunta.
+    var noPeriodo = fluxoVisivel(state.de, state.ate);
+    var ent = noPeriodo.reduce(function (a, f) { return a + f.entradas; }, 0);
+    var sai = noPeriodo.reduce(function (a, f) { return a + f.saidas; }, 0);
+    var saldo = ent - sai;
+    var curto = rotuloCurto();
 
-    // Rodape das lajotas de fluxo: o total do periodo. Um dia isolado diz
-    // pouco; o acumulado mostra se o grupo cresce ou so gira.
-    var noPeriodo = fluxoVisivel(diasAtrasISO(state.dias - 1));
-    var entP = noPeriodo.reduce(function (a, f) { return a + f.entradas; }, 0);
-    var saiP = noPeriodo.reduce(function (a, f) { return a + f.saidas; }, 0);
-    var saldoP = entP - saiP;
-    document.getElementById("t-entra-f").textContent = "+" + entP + " " + rotuloPeriodo();
-    document.getElementById("t-sai-f").textContent =
-      "−" + saiP + " " + rotuloPeriodo() + " · saldo " + (saldoP > 0 ? "+" : "") + saldoP;
+    document.getElementById("t-entra-l").textContent = "Entradas " + curto;
+    document.getElementById("t-sai-l").textContent = "Sa\u00eddas " + curto;
+    document.getElementById("t-entra").textContent = ent ? "+" + ent : "0";
+    document.getElementById("t-sai").textContent = sai ? "\u2212" + sai : "0";
+    document.getElementById("t-entra-f").textContent = umDia()
+      ? diaDaSemana(state.de) + ", " + fmtDiaCurto(state.de)
+      : "m\u00e9dia " + (ent / nDias()).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " por dia";
+    document.getElementById("t-sai-f").textContent = "saldo " + (saldo > 0 ? "+" : "") + saldo;
   }
 
   // ---------- grafico de barras divergentes ----------
@@ -675,7 +763,7 @@
       stroke: "var(--line-2)", "stroke-width": 1 }));
 
     // rotulos de data: primeiro, ultimo e o do meio - nunca um por barra
-    var marcas = n <= 2 ? [0] : [0, Math.floor((n - 1) / 2), n - 1];
+    var marcas = n === 1 ? [0] : n === 2 ? [0, 1] : [0, Math.floor((n - 1) / 2), n - 1];
     marcas.forEach(function (i) {
       var t = txt(padL + i * slot + slot / 2, H - 5, fmtDiaCurto(linhas[i].dia));
       t.setAttribute("fill", "var(--muted)");
@@ -695,7 +783,7 @@
           '<div class="tip-row"><span class="k"><i class="swatch" style="background:var(--entra)"></i>Entradas</span><span class="v">' + d.entradas + "</span></div>" +
           '<div class="tip-row"><span class="k"><i class="swatch" style="background:var(--sai)"></i>Saídas</span><span class="v">' + d.saidas + "</span></div>" +
           '<div class="tip-row"><span class="k">Saldo</span><span class="v">' + (d.saldo > 0 ? "+" : "") + d.saldo + "</span></div>" +
-          '<div class="tip-row"><span class="k">Membros no fim</span><span class="v">' + d.membros_fim_do_dia + "</span></div>";
+          '<div class="tip-row"><span class="k">Membros no fim</span><span class="v">' + (d.membros_fim_do_dia == null ? "\u2013" : d.membros_fim_do_dia) + "</span></div>";
         tip.classList.add("on");
         var cx = (padL + i * slot + slot / 2) / W * box.clientWidth;
         var lado = cx > box.clientWidth / 2 ? cx - 170 : cx + 12;
@@ -729,7 +817,7 @@
   function renderGrupos() {
     var host = document.getElementById("grupos");
     host.innerHTML = "";
-    var desde = diasAtrasISO(state.dias - 1);
+    var de = state.de, ate = state.ate;
 
     var lista = gruposVisiveis().sort(function (a, b) {
       if (a.status !== b.status) return a.status === "ativo" ? -1 : 1;
@@ -749,13 +837,14 @@
     var picoGlobal = 1;
     lista.forEach(function (g) {
       state.fluxo.forEach(function (f) {
-        if (f.group_id_api === g.group_jid && f.dia >= desde) {
+        if (f.group_id_api === g.group_jid && f.dia >= de && f.dia <= ate) {
           picoGlobal = Math.max(picoGlobal, f.entradas, f.saidas);
         }
       });
     });
     state.topo = tetoDoEixo(picoGlobal);
 
+    var n = nDias();
     lista.forEach(function (g) {
       var card = document.createElement("div");
       card.className = "group" + (g.status === "ativo" ? "" : " arquivado");
@@ -769,24 +858,24 @@
       card.appendChild(head);
       card.appendChild(medidor(g));
 
-      // serie diaria continua: dias sem amostra viram zero, senao o eixo mente
+      // Serie diaria continua: dia sem amostra entra zerado, senao o eixo mente,
+      // e marcado como sem dados, para nao inventar contagem de membros.
       var porDia = {};
       state.fluxo.forEach(function (f) {
-        if (f.group_id_api === g.group_jid && f.dia >= desde) porDia[f.dia] = f;
+        if (f.group_id_api === g.group_jid && f.dia >= de && f.dia <= ate) porDia[f.dia] = f;
       });
       var linhas = [];
-      for (var i = state.dias - 1; i >= 0; i--) {
-        var iso = diasAtrasISO(i);
-        var f = porDia[iso];
-        linhas.push(f ? f : { dia: iso, entradas: 0, saidas: 0, saldo: 0, membros_fim_do_dia: g.membros_atuais });
+      for (var i = 0; i < n; i++) {
+        var iso = somaDias(de, i);
+        linhas.push(porDia[iso] || { dia: iso, entradas: 0, saidas: 0, saldo: 0, membros_fim_do_dia: null, semDados: true });
       }
 
       host.appendChild(card);
 
       // Um dia so nao e uma serie temporal: um grafico com uma barra unica nao
-      // diz nada que tres numeros nao digam melhor.
-      if (state.dias === 1) {
-        card.appendChild(resumoDoDia(linhas[0]));
+      // diz nada que quatro numeros nao digam melhor.
+      if (umDia()) {
+        card.appendChild(resumoDoDia(linhas[0], de === hojeISO()));
         return;
       }
 
@@ -801,7 +890,7 @@
       if (!temMov) {
         var pvazio = document.createElement("p");
         pvazio.className = "empty";
-        pvazio.textContent = "Sem entradas nem saídas registradas nos últimos " + state.dias + " dias.";
+        pvazio.textContent = "Sem entradas nem sa\u00eddas registradas " + rotuloPeriodo() + ".";
         box.appendChild(pvazio);
       } else {
         box.appendChild(desenhaGrafico(box, linhas, box.clientWidth || 640, state.topo));
@@ -810,19 +899,30 @@
     });
   }
 
-  function resumoDoDia(d) {
+  function resumoDoDia(d, ehHoje) {
     var el = document.createElement("div");
     el.className = "resumo-dia";
     function bloco(rotulo, valor, classe) {
       return '<div><span class="eyebrow">' + rotulo + '</span>' +
              '<span class="v ' + classe + '">' + valor + "</span></div>";
     }
+    var rotuloMembros = ehHoje ? "Membros agora" : "Membros no fim do dia";
+
+    // Sem amostra do monitor no dia nao da para afirmar zero - so que nao se sabe.
+    if (d.semDados) {
+      el.innerHTML =
+        bloco("Entradas", "\u2013", "flat") + bloco("Sa\u00eddas", "\u2013", "flat") +
+        bloco("Saldo", "\u2013", "flat") + bloco(rotuloMembros, "\u2013", "flat") +
+        '<p class="nota">Sem registro do monitor neste dia para este grupo.</p>';
+      return el;
+    }
+
     var saldo = (d.saldo > 0 ? "+" : "") + d.saldo;
     el.innerHTML =
       bloco("Entradas", d.entradas ? "+" + d.entradas : "0", d.entradas ? "up" : "flat") +
-      bloco("Saídas", d.saidas ? "−" + d.saidas : "0", d.saidas ? "down" : "flat") +
+      bloco("Sa\u00eddas", d.saidas ? "\u2212" + d.saidas : "0", d.saidas ? "down" : "flat") +
       bloco("Saldo", saldo, d.saldo > 0 ? "up" : d.saldo < 0 ? "down" : "flat") +
-      bloco("Membros agora", d.membros_fim_do_dia, "flat");
+      bloco(rotuloMembros, d.membros_fim_do_dia, "flat");
     return el;
   }
 
@@ -838,20 +938,19 @@
   // ---------- tabela ----------
   function renderTabela() {
     var tb = document.getElementById("tbody");
-    var linhas = fluxoVisivel(diasAtrasISO(state.dias - 1))
+    var linhas = fluxoVisivel(state.de, state.ate)
       .filter(function (f) { return f.entradas || f.saidas; })
       .sort(function (a, b) {
         return a.dia === b.dia ? a.group_name.localeCompare(b.group_name) : (a.dia < b.dia ? 1 : -1);
       });
 
     document.getElementById("tab-note").textContent =
-      !linhas.length ? "Os mesmos números, em tabela."
-      : state.dias === 1 ? "O movimento de hoje, grupo a grupo."
-      : "Os mesmos números dos gráficos. Só dias com movimento, do mais recente para o mais antigo.";
+      !linhas.length ? "Os mesmos n\u00fameros, em tabela."
+      : umDia() ? "O movimento de " + rotuloPeriodo().replace(/^em /, "") + ", grupo a grupo."
+      : "Os mesmos n\u00fameros dos gr\u00e1ficos. S\u00f3 dias com movimento, do mais recente para o mais antigo.";
 
     if (!linhas.length) {
-      tb.innerHTML = '<tr><td colspan="6" class="day-cell">Nenhum movimento ' +
-        (state.dias === 1 ? "hoje" : "no período") + ".</td></tr>";
+      tb.innerHTML = '<tr><td colspan="6" class="day-cell">Nenhum movimento ' + rotuloPeriodo() + ".</td></tr>";
       return;
     }
 
@@ -861,8 +960,8 @@
       return "<tr>" +
         '<td class="day-cell">' + f.dia.split("-").reverse().join("/") + "</td>" +
         "<td>" + f.group_name + "</td>" +
-        '<td class="num ' + (f.entradas ? "e" : "z") + '">' + (f.entradas || "–") + "</td>" +
-        '<td class="num ' + (f.saidas ? "s" : "z") + '">' + (f.saidas || "–") + "</td>" +
+        '<td class="num ' + (f.entradas ? "e" : "z") + '">' + (f.entradas || "\u2013") + "</td>" +
+        '<td class="num ' + (f.saidas ? "s" : "z") + '">' + (f.saidas || "\u2013") + "</td>" +
         '<td class="num ' + salCls + '">' + sal + "</td>" +
         '<td class="num">' + f.membros_fim_do_dia + "</td>" +
         "</tr>";
@@ -880,7 +979,11 @@
     carregando = true;
     var btn = document.getElementById("btn-refresh");
     btn.disabled = true;
-    var desde = diasAtrasISO(90);
+    // Atalho relativo (hoje, ontem, 7 dias...) acompanha a virada do dia; um
+    // intervalo escolhido no calendario fica parado onde o usuario deixou.
+    if (state.preset) aplicaPreset(state.preset);
+    syncControles();
+    var desde = somaDias(hojeISO(), -JANELA);
 
     Promise.all([
       api("painel_saude_monitor?select=*"),
@@ -905,12 +1008,28 @@
   // ---------- controles ----------
   document.querySelectorAll(".seg button").forEach(function (b) {
     b.addEventListener("click", function () {
-      document.querySelectorAll(".seg button").forEach(function (o) { o.setAttribute("aria-pressed", "false"); });
-      b.setAttribute("aria-pressed", "true");
-      state.dias = Number(b.dataset.dias);
+      aplicaPreset(b.dataset.preset);
+      syncControles();
       renderTudo();
     });
   });
+
+  // Calendario: editar uma ponta que cruza a outra arrasta a outra junto, entao
+  // o intervalo nunca fica invertido. Escolher o mesmo dia nas duas = um dia so.
+  function aoMudarData(qual) {
+    var campo = document.getElementById(qual === "de" ? "dt-de" : "dt-ate");
+    var v = campo.value;
+    if (!v) { syncControles(); return; } // campo apagado: volta a mostrar o intervalo atual
+    var min = limiteMin(), max = hojeISO();
+    v = v < min ? min : v > max ? max : v;
+    if (qual === "de") { state.de = v; if (state.ate < v) state.ate = v; }
+    else { state.ate = v; if (state.de > v) state.de = v; }
+    state.preset = presetDoIntervalo();
+    syncControles();
+    renderTudo();
+  }
+  document.getElementById("dt-de").addEventListener("change", function () { aoMudarData("de"); });
+  document.getElementById("dt-ate").addEventListener("change", function () { aoMudarData("ate"); });
   document.getElementById("ck-arq").addEventListener("change", function (e) {
     state.arquivados = e.target.checked;
     renderTudo();
@@ -934,6 +1053,8 @@
     t = setTimeout(redesenhaGraficos, 150);
   });
 
+  aplicaPreset(state.preset);
+  syncControles();
   carregar();
   setInterval(carregar, 60000); // mesma cadencia do monitor
 })();

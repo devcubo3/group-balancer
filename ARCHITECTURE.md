@@ -253,6 +253,19 @@ Os dados vêm de três views (`migrations/002_views_painel.sql`):
 entradas/saídas precisa de `lag()` sobre a série de `member_count`, que o
 PostgREST não expressa — daí as views em vez de consulta direta.
 
+**Os dias são cortados no fuso de São Paulo** (`migrations/003_painel_dia_fuso_brasil.sql`),
+não em UTC. O banco roda em UTC: sem isso, a partir das 21h "Hoje" já virava o
+dia seguinte, quase vazio, e "Ontem" mostrava o dia errado inteiro.
+
+**O período é sempre um intervalo fechado de/até.** Os atalhos (Hoje, Ontem,
+7/30/90 dias) só preenchem o intervalo; o calendário edita o mesmo intervalo.
+Mover uma ponta para além da outra arrasta a outra junto, então o intervalo
+nunca fica invertido — e escolher o mesmo dia nas duas pontas é um dia só, que
+o card mostra como quatro números em vez de um gráfico de uma barra. O
+calendário vai só até 90 dias atrás: é a janela da view e a retenção de
+`monitor_logs` (`monitor_logs_retencao_90d`). Dia sem amostra do monitor
+aparece como "–", nunca como zero.
+
 **Entradas e saídas são separadas, nunca só o saldo.** Um grupo com 22 entradas e
 11 saídas não é a mesma coisa que um com 11 entradas e nenhuma saída, e o saldo
 sozinho apresenta os dois como "+11".
