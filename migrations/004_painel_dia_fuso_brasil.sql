@@ -1,5 +1,5 @@
 -- =============================================================================
--- 003 — dia do painel no fuso de São Paulo
+-- 004 — dia do painel no fuso de São Paulo
 -- =============================================================================
 --
 -- Já aplicada em produção (migration Supabase `painel_fluxo_diario_fuso_brasil`,

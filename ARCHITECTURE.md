@@ -253,7 +253,7 @@ Os dados vêm de três views (`migrations/002_views_painel.sql`):
 entradas/saídas precisa de `lag()` sobre a série de `member_count`, que o
 PostgREST não expressa — daí as views em vez de consulta direta.
 
-**Os dias são cortados no fuso de São Paulo** (`migrations/003_painel_dia_fuso_brasil.sql`),
+**Os dias são cortados no fuso de São Paulo** (`migrations/004_painel_dia_fuso_brasil.sql`),
 não em UTC. O banco roda em UTC: sem isso, a partir das 21h "Hoje" já virava o
 dia seguinte, quase vazio, e "Ontem" mostrava o dia errado inteiro.
 
