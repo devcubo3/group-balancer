@@ -49,6 +49,9 @@ def _map_group(db_data: dict) -> WhatsAppGroup:
     e o modelo usa os nomes da API UAZAPI — esta é a única ponte entre os dois.
     """
     return WhatsAppGroup(
+        # A PK da linha. Ficou anos sem ser mapeada (sempre None) porque nada
+        # precisava dela; grupo_membros e grupo_eventos referenciam por ela.
+        id=db_data.get("id"),
         group_id_api=db_data.get("group_jid"),
         name=db_data.get("subject") or "",
         invite_link=db_data.get("link_convite") or "",

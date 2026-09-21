@@ -72,6 +72,11 @@ class GroupInfoResponse(BaseModel):
     member_count: int
     invite_link: Optional[str] = None
 
+    # O array Participants cru da UAZAPI ({"JID", "LID", "IsAdmin", ...}).
+    # member_count sempre foi o len() disto; guardar a lista é o que permite
+    # saber QUEM entrou e QUEM saiu, sem nenhuma chamada extra à API.
+    participants: List[Dict[str, Any]] = []
+
 
 class LoadBalancerResult(BaseModel):
     """Resultado do algoritmo de load balancer"""
@@ -96,6 +101,53 @@ class MonitorLog(BaseModel):
     has_error: bool = False
     error_message: Optional[str] = None
     checked_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MembroGrupo(BaseModel):
+    """
+    Uma pessoa dentro de um grupo, com a origem que a trouxe.
+
+    É o roster: o monitor compara esta lista com o que a API devolve a cada
+    ciclo, e a diferença vira EventoGrupo. A origem fica gravada aqui (e não só
+    no evento de entrada) porque é na SAÍDA que ela importa — é o que permite
+    dizer "as 3 que saíram vieram do anúncio B".
+    """
+
+    grupo_id: str
+    participante_jid: str
+    participante_lid: Optional[str] = None
+    entrou_em: Optional[datetime] = None
+    visto_em: Optional[datetime] = None
+
+    clique_id: Optional[str] = None
+    # direta | ambigua | organica | preexistente
+    atribuicao: str = "organica"
+    campanha: Optional[str] = None
+    anuncio: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EventoGrupo(BaseModel):
+    """Entrada ou saída de uma pessoa num grupo, com a origem atribuída."""
+
+    grupo_id: str
+    participante_jid: str
+    tipo: str  # 'entrada' ou 'saida'
+    nicho_id: Optional[str] = None
+    ocorrido_em: Optional[datetime] = None
+
+    clique_id: Optional[str] = None
+    atribuicao: str = "organica"
+    campanha: Optional[str] = None
+    anuncio: Optional[str] = None
+
+    # Só na saída: minutos entre entrar e sair.
+    permanencia_min: Optional[int] = None
 
     class Config:
         from_attributes = True

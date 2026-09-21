@@ -324,6 +324,18 @@
   td.z { color: var(--muted); }
   .day-cell { color: var(--muted); font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 12.5px; }
 
+  /* ---- aquisicao por anuncio ---- */
+  /* Linha marcada = anuncio que traz gente e nao segura. E o unico destaque da
+     tabela, entao ele precisa significar exatamente isso e nada mais. */
+  tr.alerta td { background: var(--sai-w); }
+  tr.alerta td:first-child { box-shadow: inset 3px 0 0 var(--sai); }
+  td.aq-sem-origem { color: var(--muted); font-style: italic; }
+  .aq-flag {
+    display: inline-block; margin-left: 7px; padding: 1px 6px; border-radius: 999px;
+    background: var(--sunken); color: var(--muted);
+    font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 10.5px;
+  }
+
   footer { margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line);
            color: var(--muted); font-size: 12.5px; }
   footer p { margin: 0 0 5px; max-width: 78ch; }
@@ -398,6 +410,18 @@
 
   <div id="grupos"><p class="empty">Carregando grupos&hellip;</p></div>
 
+  <h2>Aquisição por anúncio</h2>
+  <p class="table-note" id="aq-note">De onde veio quem entrou &mdash; e de qual anúncio tinha vindo quem saiu.</p>
+  <div class="table-scroll" id="aq-scroll">
+    <table>
+      <thead>
+        <tr><th>Anúncio</th><th>Campanha</th><th>Entradas</th><th>Saídas</th><th>Saldo</th><th>Retenção 90d</th><th>Permanência</th></tr>
+      </thead>
+      <tbody id="aq-tbody"><tr><td colspan="7" class="day-cell">Carregando&hellip;</td></tr></tbody>
+    </table>
+  </div>
+  <p class="table-note" id="aq-rodape">&nbsp;</p>
+
   <h2>Dia a dia</h2>
   <p class="table-note" id="tab-note">Os mesmos números dos gráficos, em tabela.</p>
   <div class="table-scroll">
@@ -411,6 +435,7 @@
 
   <footer>
     <p>Entradas e saídas são derivadas da série de contagem de membros em <code>monitor_logs</code>, amostrada a cada 60s pelo <code>group-balancer</code>. A soma das variações positivas entre amostras consecutivas é entrada; das negativas, saída. Duas pessoas que entram e saem no intervalo de um mesmo minuto não aparecem.</p>
+    <p><b>Aquisição por anúncio</b> não sai dessa mesma conta: ali cada entrada e cada saída é uma pessoa identificada no <code>Participants</code> do grupo, comparado ciclo a ciclo. Por isso os dois quadros podem divergir &mdash; e o de anúncios só conta a partir do dia em que o rastreio subiu. A origem é inferida: o convite do WhatsApp não carrega parâmetro, então cada entrada é casada com o clique mais recente na landing para aquele grupo. Quando dois anúncios disputam a mesma entrada, ela aparece marcada como ambígua.</p>
     <p>O medidor marca o teto de <code>capacidade_max</code> do grupo e o gatilho de scale-out em <code>SCALE_OUT_THRESHOLD</code>, lido do mesmo .env que o monitor usa.</p>
     <p>Se o monitor para, tudo nesta página congela sem avisar &mdash; por isso a faixa de saúde vem antes de qualquer número.</p>
   </footer>
@@ -424,7 +449,8 @@
   var ANON = "__SUPABASE_KEY__";
   var SCALE_OUT = Number("__SCALE_OUT__") || 950;
 
-  var state = { preset: "30", de: null, ate: null, arquivados: false, grupos: [], fluxo: [], saude: null, topo: 1, sel: {} };
+  var state = { preset: "30", de: null, ate: null, arquivados: false, grupos: [], fluxo: [],
+                aquisicao: [], coorte: [], saude: null, topo: 1, sel: {} };
   function temSelecao() { return Object.keys(state.sel).length > 0; }
 
   function api(path) {
@@ -968,8 +994,98 @@
     }).join("");
   }
 
+  // ---------- aquisicao por anuncio ----------
+  // Aqui a entrada e a saida sao NOMINAIS: vem do diff do roster do grupo, nao
+  // da diferenca de contagem que alimenta tudo acima. A saida carrega o anuncio
+  // que trouxe a pessoa, e nao o anuncio que estava rodando no dia em que ela
+  // saiu - e isso que responde "as 3 que sairam vieram do anuncio B".
+  function renderAquisicao() {
+    var tb = document.getElementById("aq-tbody");
+    var rodape = document.getElementById("aq-rodape");
+    var jids = {};
+    gruposVisiveis().forEach(function (g) { jids[g.group_jid] = true; });
+
+    var porAnuncio = {};
+    state.aquisicao.forEach(function (l) {
+      if (l.dia < state.de || l.dia > state.ate) return;
+      if (!jids[l.group_jid]) return;
+      var chave = l.anuncio + "\u0000" + l.campanha;
+      var a = porAnuncio[chave] || (porAnuncio[chave] = {
+        anuncio: l.anuncio, campanha: l.campanha, entradas: 0, saidas: 0, ambiguas: 0
+      });
+      a.entradas += l.entradas;
+      a.saidas += l.saidas;
+      a.ambiguas += l.entradas_ambiguas;
+    });
+
+    // A coorte de 90 dias vem da outra view: retencao e permanencia so fazem
+    // sentido sobre quem ja teve tempo de ir embora, entao recorta-las no
+    // periodo escolhido daria um numero que muda de significado a cada clique.
+    var coorte = {};
+    state.coorte.forEach(function (c) { coorte[c.anuncio + "\u0000" + c.campanha] = c; });
+
+    var linhas = Object.keys(porAnuncio).map(function (k) {
+      var a = porAnuncio[k];
+      a.coorte = coorte[k] || null;
+      return a;
+    }).sort(function (x, y) {
+      // Por evasao, nao por volume: o anuncio que perde gente e o que precisa
+      // de decisao, mesmo que traga menos que os outros.
+      return (y.saidas - x.saidas) || (y.entradas - x.entradas);
+    });
+
+    document.getElementById("aq-note").textContent = linhas.length
+      ? "De onde veio quem entrou " + rotuloPeriodo() + " — e de qual anúncio tinha vindo quem saiu."
+      : "De onde veio quem entrou — e de qual anúncio tinha vindo quem saiu.";
+
+    if (!linhas.length) {
+      tb.innerHTML = '<tr><td colspan="7" class="day-cell">Nenhuma entrada ou saída registrada por evento ' +
+        rotuloPeriodo() + ". Este quadro só conta a partir do momento em que o rastreio de membros entrou no ar.</td></tr>";
+      rodape.innerHTML = "&nbsp;";
+      return;
+    }
+
+    var ambiguasTotal = 0;
+    tb.innerHTML = linhas.map(function (a) {
+      ambiguasTotal += a.ambiguas;
+      var saldo = a.entradas - a.saidas;
+      var c = a.coorte;
+      var ret = c && c.retencao_pct != null ? c.retencao_pct : null;
+      // So marca o que ja tem amostra suficiente: 1 pessoa que entrou e saiu da
+      // 0% de retencao e nao prova nada sobre o criativo.
+      var alerta = ret != null && ret < 70 && c.entradas >= 5;
+      var semOrigem = a.anuncio === "(sem origem)";
+
+      return '<tr' + (alerta ? ' class="alerta"' : "") + ">" +
+        "<td" + (semOrigem ? ' class="aq-sem-origem"' : "") + ">" + a.anuncio +
+          (a.ambiguas ? '<span class="aq-flag">' + a.ambiguas + " ambígua" + (a.ambiguas > 1 ? "s" : "") + "</span>" : "") + "</td>" +
+        "<td" + (semOrigem ? ' class="aq-sem-origem"' : "") + ">" + a.campanha + "</td>" +
+        '<td class="num ' + (a.entradas ? "e" : "z") + '">' + (a.entradas || "–") + "</td>" +
+        '<td class="num ' + (a.saidas ? "s" : "z") + '">' + (a.saidas || "–") + "</td>" +
+        '<td class="num ' + (saldo > 0 ? "e" : saldo < 0 ? "s" : "z") + '">' + (saldo > 0 ? "+" + saldo : saldo) + "</td>" +
+        '<td class="num ' + (ret == null ? "z" : ret < 70 ? "s" : "e") + '">' + (ret == null ? "–" : ret + "%") + "</td>" +
+        '<td class="num z">' + (c && c.permanencia_mediana_min != null ? duracao(c.permanencia_mediana_min) : "–") + "</td>" +
+        "</tr>";
+    }).join("");
+
+    var notas = [];
+    if (ambiguasTotal) {
+      notas.push("<b>" + ambiguasTotal + "</b> entrada" + (ambiguasTotal > 1 ? "s" : "") +
+        " coincidiu com cliques de anúncios diferentes no mesmo intervalo: ficou com o clique mais recente, mas pode ser do outro.");
+    }
+    notas.push("Retenção e permanência olham sempre os últimos 90 dias de cada anúncio, não o período escolhido acima.");
+    rodape.innerHTML = notas.join(" ");
+  }
+
+  // "40 min", "6h", "3 dias" - nunca "4320 min".
+  function duracao(min) {
+    if (min < 90) return min + " min";
+    if (min < 2880) return Math.round(min / 60) + "h";
+    return Math.round(min / 1440) + " dias";
+  }
+
   function renderTudo() {
-    renderChips(); renderSaude(); renderTiles(); renderGrupos(); renderTabela();
+    renderChips(); renderSaude(); renderTiles(); renderGrupos(); renderAquisicao(); renderTabela();
   }
 
   // ---------- carga ----------
@@ -988,11 +1104,15 @@
     Promise.all([
       api("painel_saude_monitor?select=*"),
       api("painel_grupos?select=*&order=nicho.asc,ordem_sequencial.asc"),
-      api("painel_fluxo_diario?select=*&dia=gte." + desde + "&order=dia.desc")
+      api("painel_fluxo_diario?select=*&dia=gte." + desde + "&order=dia.desc"),
+      api("painel_aquisicao_diaria?select=*&dia=gte." + desde + "&order=dia.desc"),
+      api("painel_aquisicao_anuncio?select=*")
     ]).then(function (res) {
       state.saude = res[0][0] || null;
       state.grupos = res[1] || [];
       state.fluxo = res[2] || [];
+      state.aquisicao = res[3] || [];
+      state.coorte = res[4] || [];
       document.getElementById("erro").innerHTML = "";
       renderTudo();
     }).catch(function (e) {

@@ -10,7 +10,17 @@ class Settings(BaseSettings):
 
     # Supabase
     supabase_url: str = Field(..., alias="SUPABASE_URL")
+    # DEVE continuar sendo a chave ANON: painel_web.py a injeta no HTML servido
+    # ao navegador. Trocar por uma service key aqui entregaria o banco inteiro a
+    # quem abrisse o DevTools no painel.
     supabase_key: str = Field(..., alias="SUPABASE_KEY")
+
+    # Chave de serviço, usada SÓ pelo rastreio de membros (src/membros.py):
+    # grupo_membros e grupo_eventos guardam telefone de gente real e ficam com
+    # RLS ligada e sem policy de leitura, justamente para a chave anon — que
+    # está publicada no JS da landing page — não conseguir lê-las.
+    # Vazia: o rastreio fica desligado e o resto do monitor segue igual.
+    supabase_service_key: str = Field("", alias="SUPABASE_SERVICE_KEY")
 
     # WhatsApp API (UazAPI)
     # whatsapp_api_token DEVE ser o token da INSTÂNCIA, não o da conta UazAPI:
@@ -42,6 +52,17 @@ class Settings(BaseSettings):
     api_call_delay: int = Field(2, alias="API_CALL_DELAY")
     api_timeout: int = Field(30, alias="API_TIMEOUT")
     daily_monitor_test_interval: int = Field(3, alias="DAILY_MONITOR_TEST_INTERVAL")
+
+    # Rastreio de membros e atribuição de anúncio
+    # ------------------------------------------------------------------
+    # O grupo mais novo de cada nicho tem o roster conferido a cada ciclo (é
+    # para onde a landing manda o tráfego pago). Os demais, só neste intervalo:
+    # saída em grupo antigo não tem pressa, mas invisível ela não pode ficar.
+    roster_interval_min: int = Field(5, alias="ROSTER_INTERVAL_MIN")
+    # Quanto tempo um clique na landing continua elegível para casar com uma
+    # entrada no grupo. Curto demais perde quem demora a tocar em "entrar";
+    # longo demais casa gente com anúncio que não foi o dela.
+    atribuicao_janela_min: int = Field(30, alias="ATRIBUICAO_JANELA_MIN")
 
     # Painel de grupos (servido pelo proprio processo do monitor)
     painel_port: int = Field(8080, alias="PAINEL_PORT")

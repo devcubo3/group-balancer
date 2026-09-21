@@ -299,7 +299,10 @@ class WhatsAppService:
                     group_id=group_jid,
                     name=subject,
                     member_count=member_count,
-                    invite_link=invite_link
+                    invite_link=invite_link,
+                    # A lista inteira, não só o tamanho: é dela que sai o roster
+                    # nominal em src/membros.py. Vem de graça nesta resposta.
+                    participants=participants if isinstance(participants, list) else [],
                 )
 
             except Exception as e:

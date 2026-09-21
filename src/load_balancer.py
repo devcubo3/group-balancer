@@ -208,24 +208,33 @@ class LoadBalancer:
         logger.error("✗ Falha ao salvar grupo no banco de dados")
         return None
 
-    def sync_group_members(self, group: WhatsAppGroup) -> bool:
+    def sync_group_members(self, group: WhatsAppGroup, rastreador=None) -> bool:
         """
         Sincroniza a contagem de membros de um grupo com a API.
 
         Args:
             group: Grupo a ser sincronizado
+            rastreador: RastreadorMembros opcional. Quando presente, o array
+                Participants DESTA MESMA resposta vira roster nominal em
+                src/membros.py — sem nenhuma chamada extra à API.
 
         Returns:
             True se sincronizado com sucesso, False caso contrário
         """
         logger.debug(f"🔄 Sincronizando membros do grupo: {group.name}")
 
-        # Busca contagem atualizada da API
-        current_count = self.whatsapp.get_group_members_count(group.group_id_api)
+        # Uma chamada só: a contagem sempre foi o len() dos participantes, e o
+        # rastreio precisa da lista inteira. Pedir duas vezes seria pagar dobrado
+        # pelo mesmo dado.
+        info = self.whatsapp.get_group_info(group.group_id_api, get_invite_link=False)
+        current_count = info.member_count if info else None
 
         if current_count is None:
             logger.error(f"✗ Falha ao obter contagem de membros: {group.name}")
             return False
+
+        if rastreador is not None and rastreador.disponivel:
+            rastreador.sincronizar(group, info.participants)
 
         # Se a contagem mudou, atualiza no banco
         if current_count != group.member_count:

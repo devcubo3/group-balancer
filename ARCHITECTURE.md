@@ -231,6 +231,43 @@ Não existe coluna `updated_at`.
 - controle_grupos_nicho_idx (nicho_id, status, ordem_sequencial)
 ```
 
+## Rastreio de membros e atribuição de anúncio
+
+`migrations/005_atribuicao_anuncios.sql` + `src/membros.py`.
+
+`painel_fluxo_diario` sempre respondeu **quantos** entraram e saíram, derivando isso da diferença de
+`membros_atuais`. O que faltava era **quem** e **de onde** — sem isso não dá para ver que as 3
+pessoas que saíram hoje vieram todas do mesmo anúncio, que é o sinal de que aquele criativo promete
+o que o grupo não entrega.
+
+A leitura nominal sai de graça: `POST /group/info` já devolve o array `Participants` a cada ciclo, e
+`whatsapp_service.py` só usava o `len()` dele. Comparar esse array com o roster salvo dá entrada e
+saída por pessoa, **sem webhook e sem uma chamada de API a mais** (`sync_group_members` agora faz uma
+chamada só e passa a lista adiante).
+
+| Tabela | Escrita por | Papel |
+|---|---|---|
+| `cliques_anuncio` | a landing, no clique do CTA | origem (UTMs da Meta) + grupo de destino |
+| `grupo_membros` | o monitor | roster atual, com a origem de cada membro |
+| `grupo_eventos` | o monitor | entradas e saídas, append-only |
+
+**A ligação clique→entrada é inferida.** O convite do WhatsApp não carrega parâmetro, então cada
+entrada nova consome o clique mais recente ainda não usado *daquele grupo*, dentro de
+`ATRIBUICAO_JANELA_MIN`. O resultado é rotulado: `direta` (um candidato, ou vários do mesmo
+anúncio), `ambigua` (anúncios diferentes disputando — o painel mostra essa contagem separada),
+`organica` (nenhum clique na janela) ou `preexistente` (já estava no grupo quando o rastreio
+começou; **não gera evento de entrada**, senão o primeiro ciclo registraria o grupo inteiro entrando
+num dia só).
+
+A **saída herda a origem** da linha de `grupo_membros` antes de a linha ser apagada. É isso, e só
+isso, que responde "as 3 que saíram vieram do anúncio B".
+
+**Chave:** este é o único lugar do sistema que usa `SUPABASE_SERVICE_KEY`. As três tabelas guardam
+telefone de gente real e ficam com RLS ligada sem nenhuma policy de leitura — a chave `anon` está
+publicada no JS da landing page, e só pode INSERIR em `cliques_anuncio`. Sem a service key o
+rastreio nasce desligado e nada mais muda. O painel chega a esses dados apenas pelas views
+agregadas `painel_aquisicao_diaria` e `painel_aquisicao_anuncio`, que nunca expõem um JID.
+
 ## Painel de grupos
 
 `python main.py monitor` sobe, além do loop, um servidor HTTP numa thread daemon
@@ -252,6 +289,12 @@ Os dados vêm de três views (`migrations/002_views_painel.sql`):
 `painel_grupos`, `painel_fluxo_diario` e `painel_saude_monitor`. O cálculo de
 entradas/saídas precisa de `lag()` sobre a série de `member_count`, que o
 PostgREST não expressa — daí as views em vez de consulta direta.
+
+A seção **Aquisição por anúncio** vem de outras duas
+(`migrations/005_atribuicao_anuncios.sql`): `painel_aquisicao_diaria` e
+`painel_aquisicao_anuncio`. Os números dela podem divergir dos de cima, e isso
+está dito no rodapé da página: um lado é amostragem de contagem, desde sempre;
+o outro é evento nominal, e só a partir do dia em que o rastreio subiu.
 
 **Os dias são cortados no fuso de São Paulo** (`migrations/004_painel_dia_fuso_brasil.sql`),
 não em UTC. O banco roda em UTC: sem isso, a partir das 21h "Hoje" já virava o

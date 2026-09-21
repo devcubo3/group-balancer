@@ -54,6 +54,9 @@ def monitor():
     m.load_balancer.db = MagicMock()
     m.check_interval = 60
     m.is_running = False
+    # Rastreio de membros desligado: estes testes são sobre a decisão de criar
+    # grupo, e o roster não participa dela.
+    m.rastreador = MagicMock(disponivel=False)
     return m
 
 

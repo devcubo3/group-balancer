@@ -9,6 +9,7 @@ from typing import Optional, Tuple
 
 from .config import settings
 from .load_balancer import LoadBalancer
+from .membros import RastreadorMembros
 from .models import MonitorLog, WhatsAppGroup
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,9 @@ class GroupMonitor:
         self.load_balancer = LoadBalancer()
         self.check_interval = settings.monitor_check_interval
         self.is_running = False
+        # Sem SUPABASE_SERVICE_KEY ele nasce indisponível e todo o resto segue
+        # exatamente como antes (ver src/membros.py).
+        self.rastreador = RastreadorMembros()
 
     def check_newest_group(self):
         """
@@ -187,9 +191,11 @@ class GroupMonitor:
             previous_count = newest_group.member_count
             group_name = newest_group.name
 
-            # Sincroniza a contagem de membros do grupo mais novo
+            # Sincroniza a contagem de membros do grupo mais novo. É aqui que o
+            # roster nominal sai de graça: este é o grupo com menos membros do
+            # nicho, ou seja, exatamente para onde a landing manda o tráfego pago.
             logger.info(f"📊 Verificando grupo: {newest_group.name}")
-            self.load_balancer.sync_group_members(newest_group)
+            self.load_balancer.sync_group_members(newest_group, rastreador=self.rastreador)
 
             # Busca novamente após sincronização
             newest_group = self.load_balancer.db.get_newest_group(nicho.id) or newest_group
@@ -435,6 +441,44 @@ class GroupMonitor:
             )
             self.load_balancer.db.save_monitor_log(log)
 
+    def check_rosters(self):
+        """
+        Confere o roster de TODOS os grupos ativos.
+
+        O grupo mais novo de cada nicho já é conferido a cada ciclo, dentro de
+        `_check_nicho`. Este passo existe pelos outros: quem entrou no grupo #001
+        meses atrás e resolveu sair hoje não aparece em lugar nenhum se o roster
+        do #001 nunca for lido. E é justamente aí que mora a evasão antiga.
+
+        Custa uma chamada /group/info por grupo ativo a cada ROSTER_INTERVAL_MIN,
+        espaçadas pelo mesmo rate limit da sincronização diária. O grupo mais
+        novo entra de novo nessa varredura: distingui-lo custaria uma consulta
+        por nicho, e reler o roster dele é um diff vazio.
+        """
+        if not self.rastreador.disponivel:
+            return
+
+        try:
+            grupos = self.load_balancer.db.get_active_groups()
+        except Exception as e:
+            logger.error(f"✗ Falha ao listar grupos para o roster: {e}")
+            return
+
+        # Grupo sem `id` é linha velha de antes do mapeamento da PK; sem ela não
+        # há como referenciar o roster.
+        pendentes = [g for g in grupos if g.id]
+
+        logger.debug(f"👥 Conferindo roster de {len(pendentes)} grupo(s) ativo(s)")
+
+        for indice, grupo in enumerate(pendentes, 1):
+            try:
+                self.load_balancer.sync_group_members(grupo, rastreador=self.rastreador)
+            except Exception as e:
+                logger.error(f"✗ Roster de {grupo.name} falhou: {e}")
+
+            if indice < len(pendentes):
+                self.load_balancer.whatsapp.wait_rate_limit()
+
     def run_continuous(self):
         """
         Executa o monitor em modo contínuo (loop infinito).
@@ -450,6 +494,11 @@ class GroupMonitor:
 
         # Agenda sincronização a cada 12 horas
         schedule.every(settings.daily_sync_interval).hours.do(self.daily_sync)
+
+        # Roster dos demais grupos (o mais novo já vai no ciclo de 60s)
+        if self.rastreador.disponivel:
+            schedule.every(settings.roster_interval_min).minutes.do(self.check_rosters)
+            logger.info(f"   Roster de todos os grupos: a cada {settings.roster_interval_min}min")
 
         # Executa primeira verificação imediatamente
         self.check_newest_group()
