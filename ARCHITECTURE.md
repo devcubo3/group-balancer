@@ -278,6 +278,14 @@ mostrar percentual sem amostra ao lado.
 o grupo não teve tempo de cansar ninguém, então quem promete demais é o anúncio. Amadurece em horas,
 o que permite matar um criativo ruim em 1–2 dias em vez de duas semanas.
 
+**Uma linha por criativo E campanha** (`migrations/007_coorte_por_campanha.sql`). A 006 juntava o
+mesmo criativo rodando em campanhas diferentes, porque o criativo é a unidade da decisão criativa.
+Mas o **gasto é por campanha**: sem separar, nenhuma linha cruza com o custo do Gerenciador e o custo
+por membro que fica — a única regra de decisão da operação — fica impossível de calcular. O risco de
+separar (percentual sobre amostra pequena) já está coberto pela base entre parênteses e pelo piso de
+20 no realce. A separação também mostrou que o mesmo `CTV 08` rende diferente por campanha: 6% de
+saída em 1h na BIDCAP contra 4% na V2, com retenção de 56% contra 65%.
+
 **Chave:** este é o único lugar do sistema que usa `SUPABASE_SERVICE_KEY`. As três tabelas guardam
 telefone de gente real e ficam com RLS ligada sem nenhuma policy de leitura — a chave `anon` está
 publicada no JS da landing page, e só pode INSERIR em `cliques_anuncio`. Sem a service key o

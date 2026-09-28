@@ -1018,16 +1018,20 @@
     var jids = {};
     gruposVisiveis().forEach(function (g) { jids[g.group_jid] = true; });
 
-    // Agrupa por CRIATIVO, nao por campanha: e o criativo que se pausa ou se
-    // escala. Antes o mesmo anuncio aparecia em 4 linhas (37%, 53%, 57%, 83%) e
-    // o numero dele nunca aparecia em lugar nenhum.
+    // Uma linha por criativo E campanha. O gasto vem por campanha no
+    // Gerenciador, entao somar o mesmo criativo rodando em campanhas diferentes
+    // impede de calcular custo por membro que fica - que e a unica regra de
+    // decisao que importa aqui. O risco de separar (percentual sobre amostra
+    // pequena) esta coberto pela base entre parenteses e pelo piso de 20 do
+    // realce.
     var porAnuncio = {};
     state.aquisicao.forEach(function (l) {
       if (l.dia < state.de || l.dia > state.ate) return;
       if (!jids[l.group_jid]) return;
-      var chave = l.anuncio + "\u0000" + (l.nicho || "");
+      var chave = l.anuncio + "\u0000" + l.campanha + "\u0000" + (l.nicho || "");
       var a = porAnuncio[chave] || (porAnuncio[chave] = {
-        anuncio: l.anuncio, nicho: l.nicho, entradas: 0, saidas: 0, ambiguas: 0
+        anuncio: l.anuncio, campanha: l.campanha, nicho: l.nicho,
+        entradas: 0, saidas: 0, ambiguas: 0
       });
       a.entradas += l.entradas;
       a.saidas += l.saidas;
@@ -1038,7 +1042,9 @@
     // proprio recorte de maturidade (a de 1h so conta quem entrou ha pelo menos
     // 1h), e refiltrar por data mudaria o significado a cada clique no calendario.
     var coorte = {};
-    state.coorte.forEach(function (c) { coorte[c.anuncio + "\u0000" + (c.nicho || "")] = c; });
+    state.coorte.forEach(function (c) {
+      coorte[c.anuncio + "\u0000" + c.campanha + "\u0000" + (c.nicho || "")] = c;
+    });
 
     function pct(parte, base) { return base ? Math.round(100 * parte / base) : null; }
 
@@ -1095,11 +1101,10 @@
       if (a.verde) selos += '<span class="aq-flag">maturando</span>';
       if (a.ambiguas) selos += '<span class="aq-flag">' + a.ambiguas + " ambígua" + (a.ambiguas > 1 ? "s" : "") + "</span>";
 
-      // Orgânico não tem campanha, e aparece uma vez por nicho — sem o nicho as
-      // duas linhas pareceriam a mesma coisa repetida.
-      var sub = organico
-        ? (a.nicho || "sem nicho")
-        : (c && c.campanhas && c.campanhas.length ? c.campanhas.join(" · ") : "");
+      // A campanha identifica a linha tanto quanto o criativo: e por ela que se
+      // acha o gasto no Gerenciador. Orgânico não tem campanha, e aparece uma
+      // vez por nicho — sem o nicho as duas linhas pareceriam repetidas.
+      var sub = organico ? (a.nicho || "sem nicho") : (a.campanha || "");
       var campanhas = sub
         ? '<span class="aq-campanhas" title="' + sub.replace(/"/g, "&quot;") + '">' + sub + "</span>"
         : "";
