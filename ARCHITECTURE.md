@@ -262,6 +262,22 @@ num dia só).
 A **saída herda a origem** da linha de `grupo_membros` antes de a linha ser apagada. É isso, e só
 isso, que responde "as 3 que saíram vieram do anúncio B".
 
+**Retenção se mede sempre com denominador de maturidade** (`migrations/006_coorte_aquisicao.sql`).
+Em 28/09 o painel mostrava o criativo `CTV 05 IMG` como o melhor da tabela, com 62% de retenção,
+quando ele era o pior que a operação já rodou: 15% de quem entrava por ele saía em **menos de uma
+hora**, contra 4% do `CTV 08` — e no mesmo posicionamento (Instagram Stories), 14% contra 0%. A causa
+era a conta `(entradas − saídas) ÷ entradas` sobre a janela inteira: 75% das entradas daquele criativo
+tinham menos de 24h (idade média 21h) contra 92h do outro, e ninguém ainda tinha tido tempo de sair.
+
+Por isso `painel_aquisicao_coorte` conta **pessoas, não eventos** — pareia cada entrada com a saída
+seguinte daquela mesma pessoa — e cada taxa carrega seu próprio recorte: a de 1h só considera quem
+entrou há pelo menos 1h, a de 48h idem, e a view devolve `base_1h`/`base_48h` para o painel nunca
+mostrar percentual sem amostra ao lado.
+
+**Saída em 1h é o sinal de quebra de expectativa**, e é o único realce da tabela: em menos de uma hora
+o grupo não teve tempo de cansar ninguém, então quem promete demais é o anúncio. Amadurece em horas,
+o que permite matar um criativo ruim em 1–2 dias em vez de duas semanas.
+
 **Chave:** este é o único lugar do sistema que usa `SUPABASE_SERVICE_KEY`. As três tabelas guardam
 telefone de gente real e ficam com RLS ligada sem nenhuma policy de leitura — a chave `anon` está
 publicada no JS da landing page, e só pode INSERIR em `cliques_anuncio`. Sem a service key o

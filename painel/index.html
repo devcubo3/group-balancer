@@ -335,6 +335,18 @@
     background: var(--sunken); color: var(--muted);
     font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 10.5px;
   }
+  /* Esta tabela so tem UMA coluna de texto; a regra global solta acima alinha as
+     duas primeiras a esquerda, o que jogaria "Entradas" para o lado errado. */
+  #aq-tabela th:nth-child(2), #aq-tabela td:nth-child(2) { text-align: right; }
+  /* Campanhas que usaram o criativo: contexto, nunca a informacao principal.
+     Truncado porque a lista inteira empurrava as colunas de numero para fora da
+     tela - o nome completo fica no title. */
+  .aq-campanhas {
+    display: block; margin-top: 2px; font-size: 11px; color: var(--muted);
+    max-width: 330px; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* Amostra do percentual, entre parenteses. 100% sobre 2 pessoas nao e 100%. */
+  .aq-base { color: var(--muted); font-size: 11.5px; }
 
   footer { margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line);
            color: var(--muted); font-size: 12.5px; }
@@ -413,11 +425,11 @@
   <h2>Aquisição por anúncio</h2>
   <p class="table-note" id="aq-note">De onde veio quem entrou &mdash; e de qual anúncio tinha vindo quem saiu.</p>
   <div class="table-scroll" id="aq-scroll">
-    <table>
+    <table id="aq-tabela">
       <thead>
-        <tr><th>Anúncio</th><th>Campanha</th><th>Entradas</th><th>Saídas</th><th>Saldo</th><th>Retenção 90d</th><th>Permanência</th></tr>
+        <tr><th>Anúncio</th><th>Entradas</th><th>Saída em 1h</th><th>Retenção 48h</th><th>Permanência</th><th>Saldo</th></tr>
       </thead>
-      <tbody id="aq-tbody"><tr><td colspan="7" class="day-cell">Carregando&hellip;</td></tr></tbody>
+      <tbody id="aq-tbody"><tr><td colspan="6" class="day-cell">Carregando&hellip;</td></tr></tbody>
     </table>
   </div>
   <p class="table-note" id="aq-rodape">&nbsp;</p>
@@ -436,6 +448,7 @@
   <footer>
     <p>Entradas e saídas são derivadas da série de contagem de membros em <code>monitor_logs</code>, amostrada a cada 60s pelo <code>group-balancer</code>. A soma das variações positivas entre amostras consecutivas é entrada; das negativas, saída. Duas pessoas que entram e saem no intervalo de um mesmo minuto não aparecem.</p>
     <p><b>Aquisição por anúncio</b> não sai dessa mesma conta: ali cada entrada e cada saída é uma pessoa identificada no <code>Participants</code> do grupo, comparado ciclo a ciclo. Por isso os dois quadros podem divergir &mdash; e o de anúncios só conta a partir do dia em que o rastreio subiu. A origem é inferida: o convite do WhatsApp não carrega parâmetro, então cada entrada é casada com o clique mais recente na landing para aquele grupo. Quando dois anúncios disputam a mesma entrada, ela aparece marcada como ambígua.</p>
+    <p>Naquela tabela, <b>toda taxa carrega o próprio denominador</b>: a de 1h só conta quem entrou há pelo menos 1h, a de 48h idem, e o número entre parênteses é o tamanho dessa amostra. Sem isso um criativo recém-subido aparece com retenção excelente apenas porque ninguém teve tempo de sair &mdash; foi o que aconteceu até 28/09, quando o pior criativo da operação liderava o quadro com 62%.</p>
     <p>O medidor marca o teto de <code>capacidade_max</code> do grupo e o gatilho de scale-out em <code>SCALE_OUT_THRESHOLD</code>, lido do mesmo .env que o monitor usa.</p>
     <p>Se o monitor para, tudo nesta página congela sem avisar &mdash; por isso a faixa de saúde vem antes de qualquer número.</p>
   </footer>
@@ -450,7 +463,7 @@
   var SCALE_OUT = Number("__SCALE_OUT__") || 950;
 
   var state = { preset: "30", de: null, ate: null, arquivados: false, grupos: [], fluxo: [],
-                aquisicao: [], coorte: [], saude: null, topo: 1, sel: {} };
+                aquisicao: [], coorte: [], evasaoBase: [], saude: null, topo: 1, sel: {} };
   function temSelecao() { return Object.keys(state.sel).length > 0; }
 
   function api(path) {
@@ -1005,33 +1018,51 @@
     var jids = {};
     gruposVisiveis().forEach(function (g) { jids[g.group_jid] = true; });
 
+    // Agrupa por CRIATIVO, nao por campanha: e o criativo que se pausa ou se
+    // escala. Antes o mesmo anuncio aparecia em 4 linhas (37%, 53%, 57%, 83%) e
+    // o numero dele nunca aparecia em lugar nenhum.
     var porAnuncio = {};
     state.aquisicao.forEach(function (l) {
       if (l.dia < state.de || l.dia > state.ate) return;
       if (!jids[l.group_jid]) return;
-      var chave = l.anuncio + "\u0000" + l.campanha;
+      var chave = l.anuncio + "\u0000" + (l.nicho || "");
       var a = porAnuncio[chave] || (porAnuncio[chave] = {
-        anuncio: l.anuncio, campanha: l.campanha, entradas: 0, saidas: 0, ambiguas: 0
+        anuncio: l.anuncio, nicho: l.nicho, entradas: 0, saidas: 0, ambiguas: 0
       });
       a.entradas += l.entradas;
       a.saidas += l.saidas;
       a.ambiguas += l.entradas_ambiguas;
     });
 
-    // A coorte de 90 dias vem da outra view: retencao e permanencia so fazem
-    // sentido sobre quem ja teve tempo de ir embora, entao recorta-las no
-    // periodo escolhido daria um numero que muda de significado a cada clique.
+    // A coorte NAO acompanha o periodo escolhido: cada taxa dela ja carrega o
+    // proprio recorte de maturidade (a de 1h so conta quem entrou ha pelo menos
+    // 1h), e refiltrar por data mudaria o significado a cada clique no calendario.
     var coorte = {};
-    state.coorte.forEach(function (c) { coorte[c.anuncio + "\u0000" + c.campanha] = c; });
+    state.coorte.forEach(function (c) { coorte[c.anuncio + "\u0000" + (c.nicho || "")] = c; });
+
+    function pct(parte, base) { return base ? Math.round(100 * parte / base) : null; }
 
     var linhas = Object.keys(porAnuncio).map(function (k) {
       var a = porAnuncio[k];
-      a.coorte = coorte[k] || null;
+      var c = a.c = coorte[k] || null;
+
+      a.saida1h = c && c.base_1h >= 10 ? pct(c.saiu_1h, c.base_1h) : null;
+      a.ret48 = c && c.base_48h >= 10 ? 100 - pct(c.saiu_48h, c.base_48h) : null;
+
+      // Metade ou mais das entradas com menos de 24h. O selo vale para a coluna
+      // de 48h, que ainda nao teve tempo de acontecer - NAO para a de 1h, que
+      // amadurece em uma hora e por isso e o sinal rapido desta tabela.
+      a.verde = !!c && c.entradas > 0 && c.entradas_verdes / c.entradas > 0.5;
+
+      // O unico realce da tabela, e ele independe do selo acima: sair em menos
+      // de uma hora nao e cansaco do grupo, nao deu tempo. E o anuncio
+      // prometendo o que o grupo nao e. Suprimir isto em criativo novo seria
+      // esconder justamente o caso que este quadro existe para pegar.
+      a.alerta = a.saida1h != null && a.saida1h >= 10 && c.base_1h >= 20;
       return a;
     }).sort(function (x, y) {
-      // Por evasao, nao por volume: o anuncio que perde gente e o que precisa
-      // de decisao, mesmo que traga menos que os outros.
-      return (y.saidas - x.saidas) || (y.entradas - x.entradas);
+      if (x.alerta !== y.alerta) return x.alerta ? -1 : 1;
+      return y.entradas - x.entradas;
     });
 
     document.getElementById("aq-note").textContent = linhas.length
@@ -1039,41 +1070,77 @@
       : "De onde veio quem entrou — e de qual anúncio tinha vindo quem saiu.";
 
     if (!linhas.length) {
-      tb.innerHTML = '<tr><td colspan="7" class="day-cell">Nenhuma entrada ou saída registrada por evento ' +
+      tb.innerHTML = '<tr><td colspan="6" class="day-cell">Nenhuma entrada ou saída registrada por evento ' +
         rotuloPeriodo() + ". Este quadro só conta a partir do momento em que o rastreio de membros entrou no ar.</td></tr>";
       rodape.innerHTML = "&nbsp;";
       return;
     }
 
-    var ambiguasTotal = 0;
+    // "15% (53)" - o percentual nunca sai sem o tamanho da amostra ao lado.
+    function comBase(valor, base, classe) {
+      if (valor == null) return '<td class="num z">–</td>';
+      return '<td class="num ' + classe + '">' + valor + "%" +
+             ' <span class="aq-base">(' + base + ")</span></td>";
+    }
+
+    var ambiguasTotal = 0, algumVerde = false;
     tb.innerHTML = linhas.map(function (a) {
       ambiguasTotal += a.ambiguas;
+      if (a.verde) algumVerde = true;
       var saldo = a.entradas - a.saidas;
-      var c = a.coorte;
-      var ret = c && c.retencao_pct != null ? c.retencao_pct : null;
-      // So marca o que ja tem amostra suficiente: 1 pessoa que entrou e saiu da
-      // 0% de retencao e nao prova nada sobre o criativo.
-      var alerta = ret != null && ret < 70 && c.entradas >= 5;
-      var semOrigem = a.anuncio === "(sem origem)";
+      var c = a.c;
+      var organico = a.anuncio === "(sem origem)" || a.anuncio === "(organico)";
 
-      return '<tr' + (alerta ? ' class="alerta"' : "") + ">" +
-        "<td" + (semOrigem ? ' class="aq-sem-origem"' : "") + ">" + a.anuncio +
-          (a.ambiguas ? '<span class="aq-flag">' + a.ambiguas + " ambígua" + (a.ambiguas > 1 ? "s" : "") + "</span>" : "") + "</td>" +
-        "<td" + (semOrigem ? ' class="aq-sem-origem"' : "") + ">" + a.campanha + "</td>" +
+      var selos = "";
+      if (a.verde) selos += '<span class="aq-flag">maturando</span>';
+      if (a.ambiguas) selos += '<span class="aq-flag">' + a.ambiguas + " ambígua" + (a.ambiguas > 1 ? "s" : "") + "</span>";
+
+      // Orgânico não tem campanha, e aparece uma vez por nicho — sem o nicho as
+      // duas linhas pareceriam a mesma coisa repetida.
+      var sub = organico
+        ? (a.nicho || "sem nicho")
+        : (c && c.campanhas && c.campanhas.length ? c.campanhas.join(" · ") : "");
+      var campanhas = sub
+        ? '<span class="aq-campanhas" title="' + sub.replace(/"/g, "&quot;") + '">' + sub + "</span>"
+        : "";
+
+      return '<tr' + (a.alerta ? ' class="alerta"' : "") + ">" +
+        "<td" + (organico ? ' class="aq-sem-origem"' : "") + ">" + a.anuncio + selos + campanhas + "</td>" +
         '<td class="num ' + (a.entradas ? "e" : "z") + '">' + (a.entradas || "–") + "</td>" +
-        '<td class="num ' + (a.saidas ? "s" : "z") + '">' + (a.saidas || "–") + "</td>" +
-        '<td class="num ' + (saldo > 0 ? "e" : saldo < 0 ? "s" : "z") + '">' + (saldo > 0 ? "+" + saldo : saldo) + "</td>" +
-        '<td class="num ' + (ret == null ? "z" : ret < 70 ? "s" : "e") + '">' + (ret == null ? "–" : ret + "%") + "</td>" +
+        comBase(a.saida1h, c ? c.base_1h : 0, a.saida1h == null ? "z" : a.saida1h >= 10 ? "s" : "e") +
+        comBase(a.ret48, c ? c.base_48h : 0, a.ret48 == null ? "z" : a.ret48 < 50 ? "s" : "e") +
         '<td class="num z">' + (c && c.permanencia_mediana_min != null ? duracao(c.permanencia_mediana_min) : "–") + "</td>" +
+        '<td class="num ' + (saldo > 0 ? "e" : saldo < 0 ? "s" : "z") + '">' + (saldo > 0 ? "+" + saldo : saldo) + "</td>" +
         "</tr>";
     }).join("");
 
     var notas = [];
-    if (ambiguasTotal) {
-      notas.push("<b>" + ambiguasTotal + "</b> entrada" + (ambiguasTotal > 1 ? "s" : "") +
-        " coincidiu com cliques de anúncios diferentes no mesmo intervalo: ficou com o clique mais recente, mas pode ser do outro.");
+    notas.push("<b>Entradas</b> e <b>saldo</b> seguem o período escolhido. <b>Saída em 1h</b> e " +
+      "<b>retenção 48h</b> não: cada uma conta só quem já teve aquele tempo de grupo, e o número entre " +
+      "parênteses é quanta gente entrou nessa conta. É o que impede um criativo que subiu ontem de " +
+      "parecer ótimo só porque ninguém teve tempo de sair ainda.");
+    notas.push("Sair em menos de 1h é quebra de expectativa: não deu tempo de o grupo cansar ninguém. " +
+      "Acima de 10% a linha fica marcada.");
+    if (algumVerde) {
+      notas.push("Linhas marcadas como <b>maturando</b> têm mais da metade das entradas com menos de 24h — " +
+        "cedo para julgar, para o bem ou para o mal.");
     }
-    notas.push("Retenção e permanência olham sempre os últimos 90 dias de cada anúncio, não o período escolhido acima.");
+    if (ambiguasTotal) {
+      notas.push("<b>" + ambiguasTotal + "</b> " +
+        (ambiguasTotal > 1 ? "entradas coincidiram" : "entrada coincidiu") +
+        " com cliques de anúncios diferentes no mesmo intervalo: " +
+        (ambiguasTotal > 1 ? "ficaram" : "ficou") + " com o clique mais recente, mas pode ser do outro.");
+    }
+    if (state.evasaoBase && state.evasaoBase.length) {
+      var base = state.evasaoBase.filter(function (b) { return b.dia >= state.de && b.dia <= state.ate; });
+      var saidasBase = base.reduce(function (s, b) { return s + b.saidas_base; }, 0);
+      var restantes = base.length ? base[0].restantes_na_base : 0;
+      if (saidasBase) {
+        notas.push("Fora desta tabela: <b>" + saidasBase + "</b> saída" + (saidasBase > 1 ? "s" : "") +
+          " " + rotuloPeriodo() + " de quem já estava no grupo antes do rastreio (restam " + restantes +
+          "). Não têm anúncio de origem, então não pertencem a linha nenhuma daqui.");
+      }
+    }
     rodape.innerHTML = notas.join(" ");
   }
 
@@ -1106,13 +1173,15 @@
       api("painel_grupos?select=*&order=nicho.asc,ordem_sequencial.asc"),
       api("painel_fluxo_diario?select=*&dia=gte." + desde + "&order=dia.desc"),
       api("painel_aquisicao_diaria?select=*&dia=gte." + desde + "&order=dia.desc"),
-      api("painel_aquisicao_anuncio?select=*")
+      api("painel_aquisicao_coorte?select=*"),
+      api("painel_evasao_base?select=*&dia=gte." + desde + "&order=dia.desc")
     ]).then(function (res) {
       state.saude = res[0][0] || null;
       state.grupos = res[1] || [];
       state.fluxo = res[2] || [];
       state.aquisicao = res[3] || [];
       state.coorte = res[4] || [];
+      state.evasaoBase = res[5] || [];
       document.getElementById("erro").innerHTML = "";
       renderTudo();
     }).catch(function (e) {
