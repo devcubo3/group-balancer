@@ -427,9 +427,9 @@
   <div class="table-scroll" id="aq-scroll">
     <table id="aq-tabela">
       <thead>
-        <tr><th>Anúncio</th><th>Entradas</th><th>Saída em 1h</th><th>Retenção 48h</th><th>Permanência</th><th>Saldo</th></tr>
+        <tr><th>Anúncio</th><th>Entradas</th><th>Saídas</th><th>Saldo</th><th>Saída em 1h</th><th>Retenção 48h</th><th>Permanência</th></tr>
       </thead>
-      <tbody id="aq-tbody"><tr><td colspan="6" class="day-cell">Carregando&hellip;</td></tr></tbody>
+      <tbody id="aq-tbody"><tr><td colspan="7" class="day-cell">Carregando&hellip;</td></tr></tbody>
     </table>
   </div>
   <p class="table-note" id="aq-rodape">&nbsp;</p>
@@ -1070,7 +1070,7 @@
       : "De onde veio quem entrou — e de qual anúncio tinha vindo quem saiu.";
 
     if (!linhas.length) {
-      tb.innerHTML = '<tr><td colspan="6" class="day-cell">Nenhuma entrada ou saída registrada por evento ' +
+      tb.innerHTML = '<tr><td colspan="7" class="day-cell">Nenhuma entrada ou saída registrada por evento ' +
         rotuloPeriodo() + ". Este quadro só conta a partir do momento em que o rastreio de membros entrou no ar.</td></tr>";
       rodape.innerHTML = "&nbsp;";
       return;
@@ -1106,11 +1106,16 @@
 
       return '<tr' + (a.alerta ? ' class="alerta"' : "") + ">" +
         "<td" + (organico ? ' class="aq-sem-origem"' : "") + ">" + a.anuncio + selos + campanhas + "</td>" +
+        // Bloco do periodo escolhido. Saidas vem antes do saldo e nao sai daqui:
+        // "quantos sairam deste anuncio" e a pergunta que originou o painel, e
+        // deixa-la implicita no saldo obriga a fazer a subtracao de cabeca.
         '<td class="num ' + (a.entradas ? "e" : "z") + '">' + (a.entradas || "–") + "</td>" +
+        '<td class="num ' + (a.saidas ? "s" : "z") + '">' + (a.saidas || "–") + "</td>" +
+        '<td class="num ' + (saldo > 0 ? "e" : saldo < 0 ? "s" : "z") + '">' + (saldo > 0 ? "+" + saldo : saldo) + "</td>" +
+        // Bloco de coorte: ignora o periodo, cada um com sua propria maturidade.
         comBase(a.saida1h, c ? c.base_1h : 0, a.saida1h == null ? "z" : a.saida1h >= 10 ? "s" : "e") +
         comBase(a.ret48, c ? c.base_48h : 0, a.ret48 == null ? "z" : a.ret48 < 50 ? "s" : "e") +
         '<td class="num z">' + (c && c.permanencia_mediana_min != null ? duracao(c.permanencia_mediana_min) : "–") + "</td>" +
-        '<td class="num ' + (saldo > 0 ? "e" : saldo < 0 ? "s" : "z") + '">' + (saldo > 0 ? "+" + saldo : saldo) + "</td>" +
         "</tr>";
     }).join("");
 
