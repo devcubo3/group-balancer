@@ -347,6 +347,12 @@
   }
   /* Amostra do percentual, entre parenteses. 100% sobre 2 pessoas nao e 100%. */
   .aq-base { color: var(--muted); font-size: 11.5px; }
+  /* Rodape da tabela: a linha que nao e anuncio e o total. Existem para as
+     partes somarem o todo - sem elas, a tabela some com saidas que as lajotas
+     do topo contam, e o numero nao fecha. */
+  #aq-tabela tfoot td { border-top: 1px solid var(--line-2); }
+  #aq-tabela tfoot tr.aq-total td { font-weight: 600; }
+  #aq-tabela tfoot tr.aq-fora td:first-child { color: var(--muted); font-style: italic; }
 
   footer { margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line);
            color: var(--muted); font-size: 12.5px; }
@@ -430,6 +436,7 @@
         <tr><th>Anúncio</th><th>Entradas</th><th>Saídas</th><th>Saldo</th><th>Saída em 1h</th><th>Retenção 48h</th><th>Permanência</th></tr>
       </thead>
       <tbody id="aq-tbody"><tr><td colspan="7" class="day-cell">Carregando&hellip;</td></tr></tbody>
+      <tfoot id="aq-tfoot"></tfoot>
     </table>
   </div>
   <p class="table-note" id="aq-rodape">&nbsp;</p>
@@ -1075,9 +1082,23 @@
       ? "De onde veio quem entrou " + rotuloPeriodo() + " — e de qual anúncio tinha vindo quem saiu."
       : "De onde veio quem entrou — e de qual anúncio tinha vindo quem saiu.";
 
-    if (!linhas.length) {
+    // Saídas de quem já estava no grupo quando o rastreio subiu. Não pertencem a
+    // anúncio nenhum, mas precisam aparecer: sem elas a tabela não fecha com as
+    // lajotas do topo, e sobra para quem lê descobrir onde foi parar a diferença.
+    var nichosVisiveis = {};
+    gruposVisiveis().forEach(function (g) { nichosVisiveis[g.nicho || ""] = true; });
+    var saidasBase = (state.evasaoBase || []).reduce(function (soma, b) {
+      if (b.dia < state.de || b.dia > state.ate) return soma;
+      if (!nichosVisiveis[b.nicho || ""]) return soma;
+      return soma + b.saidas_base;
+    }, 0);
+
+    var tf = document.getElementById("aq-tfoot");
+
+    if (!linhas.length && !saidasBase) {
       tb.innerHTML = '<tr><td colspan="7" class="day-cell">Nenhuma entrada ou saída registrada por evento ' +
         rotuloPeriodo() + ". Este quadro só conta a partir do momento em que o rastreio de membros entrou no ar.</td></tr>";
+      tf.innerHTML = "";
       rodape.innerHTML = "&nbsp;";
       return;
     }
@@ -1124,6 +1145,28 @@
         "</tr>";
     }).join("");
 
+    // Rodapé da tabela: a linha que não é anúncio, e o total que fecha com as
+    // lajotas do topo da página.
+    function celulaNum(valor, classe) {
+      return '<td class="num ' + (valor ? classe : "z") + '">' + (valor || "–") + "</td>";
+    }
+    var totalEntradas = linhas.reduce(function (s, a) { return s + a.entradas; }, 0);
+    var totalSaidas = linhas.reduce(function (s, a) { return s + a.saidas; }, 0) + saidasBase;
+    var totalSaldo = totalEntradas - totalSaidas;
+    var vazias = '<td class="num z">–</td><td class="num z">–</td><td class="num z">–</td>';
+
+    tf.innerHTML =
+      (saidasBase
+        ? '<tr class="aq-fora"><td>Entrou antes do rastreio' +
+          '<span class="aq-campanhas">sem anúncio de origem — não pertence a nenhuma linha acima</span></td>' +
+          '<td class="num z">–</td>' + celulaNum(saidasBase, "s") +
+          '<td class="num s">-' + saidasBase + "</td>" + vazias + "</tr>"
+        : "") +
+      '<tr class="aq-total"><td>Total ' + rotuloPeriodo() + "</td>" +
+      celulaNum(totalEntradas, "e") + celulaNum(totalSaidas, "s") +
+      '<td class="num ' + (totalSaldo > 0 ? "e" : totalSaldo < 0 ? "s" : "z") + '">' +
+      (totalSaldo > 0 ? "+" + totalSaldo : totalSaldo) + "</td>" + vazias + "</tr>";
+
     var notas = [];
     notas.push("<b>Entradas</b> e <b>saldo</b> seguem o período escolhido. <b>Saída em 1h</b> e " +
       "<b>retenção 48h</b> não: cada uma conta só quem já teve aquele tempo de grupo, e o número entre " +
@@ -1141,15 +1184,14 @@
         " com cliques de anúncios diferentes no mesmo intervalo: " +
         (ambiguasTotal > 1 ? "ficaram" : "ficou") + " com o clique mais recente, mas pode ser do outro.");
     }
-    if (state.evasaoBase && state.evasaoBase.length) {
-      var base = state.evasaoBase.filter(function (b) { return b.dia >= state.de && b.dia <= state.ate; });
-      var saidasBase = base.reduce(function (s, b) { return s + b.saidas_base; }, 0);
-      var restantes = base.length ? base[0].restantes_na_base : 0;
-      if (saidasBase) {
-        notas.push("Fora desta tabela: <b>" + saidasBase + "</b> saída" + (saidasBase > 1 ? "s" : "") +
-          " " + rotuloPeriodo() + " de quem já estava no grupo antes do rastreio (restam " + restantes +
-          "). Não têm anúncio de origem, então não pertencem a linha nenhuma daqui.");
-      }
+    if (saidasBase) {
+      var restantes = 0;
+      (state.evasaoBase || []).forEach(function (b) {
+        if (nichosVisiveis[b.nicho || ""]) restantes = Math.max(restantes, b.restantes_na_base);
+      });
+      notas.push("A linha <b>entrou antes do rastreio</b> são pessoas que já estavam no grupo em 21/09, " +
+        "quando o rastreio subiu — restam " + restantes + ". Elas não têm anúncio de origem, mas contam " +
+        "no total, que por isso bate com as lajotas do topo da página.");
     }
     rodape.innerHTML = notas.join(" ");
   }

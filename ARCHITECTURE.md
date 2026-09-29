@@ -278,6 +278,11 @@ mostrar percentual sem amostra ao lado.
 o grupo não teve tempo de cansar ninguém, então quem promete demais é o anúncio. Amadurece em horas,
 o que permite matar um criativo ruim em 1–2 dias em vez de duas semanas.
 
+**As partes somam o todo.** A tabela de anúncios fecha com as lajotas do topo da página: as saídas
+de quem já estava no grupo antes do rastreio (`painel_evasao_base`) entram como uma linha própria no
+`tfoot`, junto de um total. Elas não pertencem a anúncio nenhum — mas somem do quadro se ficarem
+fora, e quem confere o número vai procurar a diferença.
+
 **Uma linha por criativo E campanha** (`migrations/007_coorte_por_campanha.sql`). A 006 juntava o
 mesmo criativo rodando em campanhas diferentes, porque o criativo é a unidade da decisão criativa.
 Mas o **gasto é por campanha**: sem separar, nenhuma linha cruza com o custo do Gerenciador e o custo
