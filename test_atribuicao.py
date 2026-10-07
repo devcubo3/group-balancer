@@ -13,6 +13,7 @@ from src.membros import (
     atribuir_entradas,
     chave,
     diff_roster,
+    funil_morto,
     identidade,
     permanencia_em_minutos,
 )
@@ -274,3 +275,64 @@ def test_falha_no_banco_nao_derruba_o_ciclo():
         grupo(), [participante("a@s.whatsapp.net")]
     )
     assert stats == {"entradas": 0, "saidas": 0, "semeados": 0}
+
+
+# --------------------------------------------------------------- funil morto
+def test_funil_morto_com_cliques_e_nenhuma_entrada():
+    # O 06/10 do PromoBaby #001: tráfego chegando, convite restrito.
+    assert funil_morto(cliques=8, entradas=0, minimo=8)
+
+
+def test_funil_com_uma_entrada_nao_e_morto():
+    # Criativo ruim derruba a taxa; só link restrito zera.
+    assert not funil_morto(cliques=30, entradas=1, minimo=8)
+
+
+def test_pouco_clique_nao_alerta():
+    # Madrugada com 2 cliques sem entrada é ruído, não restrição.
+    assert not funil_morto(cliques=7, entradas=0, minimo=8)
+
+
+# ------------------------------------------------------- failover de convite
+from src.load_balancer import sem_convite_disponivel
+
+AGORA = datetime(2026, 10, 7, 15, 0, tzinfo=timezone.utc)
+
+
+def grupo_conv(nome, membros, restrito_ate=None):
+    return WhatsAppGroup(group_id_api=f"{nome}@g.us", name=nome, invite_link="x",
+                         member_count=membros, convite_restrito_ate=restrito_ate)
+
+
+def test_failover_quando_o_unico_grupo_esta_restrito():
+    # O PromoBaby #001 em 07/10: 415 membros, convite restrito por 7 dias.
+    g1 = grupo_conv("#001", 415, AGORA + timedelta(days=6))
+    assert sem_convite_disponivel([g1], AGORA, 900)
+
+
+def test_sem_failover_quando_ha_outro_grupo_com_convite():
+    # Depois do #002 nascer, o monitor não pode abrir um #003 a cada ciclo.
+    g1 = grupo_conv("#001", 415, AGORA + timedelta(days=6))
+    g2 = grupo_conv("#002", 0)
+    assert not sem_convite_disponivel([g1, g2], AGORA, 900)
+
+
+def test_restricao_vencida_volta_a_valer():
+    g1 = grupo_conv("#001", 415, AGORA - timedelta(minutes=1))
+    assert not sem_convite_disponivel([g1], AGORA, 900)
+
+
+def test_grupo_cheio_tambem_nao_e_porta():
+    g1 = grupo_conv("#001", 415, AGORA + timedelta(days=6))
+    g2 = grupo_conv("#002", 950)
+    assert sem_convite_disponivel([g1, g2], AGORA, 900)
+
+
+def test_nicho_sem_grupo_nao_e_failover():
+    # Tem caminho próprio no monitor, com dupla confirmação.
+    assert not sem_convite_disponivel([], AGORA, 900)
+
+
+def test_data_vinda_do_banco_sem_fuso():
+    g1 = grupo_conv("#001", 415, datetime(2026, 10, 14, 12, 0))
+    assert g1.convite_restrito(AGORA)

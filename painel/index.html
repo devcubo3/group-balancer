@@ -594,6 +594,7 @@
     var m = s.minutos_desde_ultimo_ciclo;
     var estado = m == null ? "crit" : m <= 5 ? "ok" : m <= 30 ? "warn" : "crit";
     if (estado === "ok" && (s.erros_24h > 0 || s.grupos_criados_24h > 0)) estado = "warn";
+    if (s.convite_suspeito) estado = "crit";
 
     var texto;
     if (m == null) texto = "Monitor sem registro";
@@ -617,6 +618,9 @@
       p.appendChild(d); p.appendChild(document.createTextNode(txt));
       facts.appendChild(p);
     }
+    // Cliques chegando e ninguém entrando, ou grupo já marcado como restrito
+    // (fora das landings, leads indo para o próximo da cadeia).
+    if (s.convite_suspeito) pill("crit", "Convite restrito: " + s.convite_suspeito);
     pill(s.erros_24h > 0 ? "warn" : "ok", s.erros_24h + " " + plural(s.erros_24h, "erro", "erros") + " /24h");
     pill(s.grupos_criados_24h > 0 ? "warn" : "ok",
          s.grupos_criados_24h + " " + plural(s.grupos_criados_24h, "grupo criado", "grupos criados") + " /24h");

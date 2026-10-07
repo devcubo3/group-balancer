@@ -71,6 +71,7 @@ def _map_group(db_data: dict) -> WhatsAppGroup:
         default_membership_approval_mode=db_data.get("default_membership_approval_mode"),
         is_incognito=db_data.get("is_incognito"),
         linked_parent_jid=db_data.get("linked_parent_jid"),
+        convite_restrito_ate=db_data.get("convite_restrito_ate"),
     )
 
 
@@ -312,6 +313,13 @@ class SupabaseClient:
         except APIError as e:
             logger.error(f"✗ Erro ao criar grupo no Supabase: {e}")
             return None
+
+    def marcar_convite_restrito(self, grupo_id: str, ate: datetime) -> None:
+        """Tira o grupo das landings até `ate`. Levanta em falha: quem chama
+        precisa saber que o failover não aconteceu."""
+        self.client.table(self.table_name).update(
+            {"convite_restrito_ate": ate.isoformat()}
+        ).eq("id", grupo_id).execute()
 
     def update_member_count(self, group_id_api: str, new_count: int) -> bool:
         """

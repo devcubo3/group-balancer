@@ -63,6 +63,14 @@ class Settings(BaseSettings):
     # entrada no grupo. Curto demais perde quem demora a tocar em "entrar";
     # longo demais casa gente com anúncio que não foi o dela.
     atribuicao_janela_min: int = Field(30, alias="ATRIBUICAO_JANELA_MIN")
+    # Funil morto: clique chegando e ninguém entrando. É o sintoma de link de
+    # convite restrito pelo WhatsApp — em 06/10 o PromoBaby #001 passou 20h
+    # assim, com anúncio pago rodando, sem nenhum aviso.
+    funil_janela_horas: int = Field(3, alias="FUNIL_JANELA_HORAS")
+    funil_cliques_minimo: int = Field(8, alias="FUNIL_CLIQUES_MINIMO")
+    # Por quanto tempo o grupo com funil morto sai das landings. 7 dias é a
+    # restrição que o WhatsApp aplicou ao convite do PromoBaby #001.
+    funil_bloqueio_dias: int = Field(7, alias="FUNIL_BLOQUEIO_DIAS")
 
     # Painel de grupos (servido pelo proprio processo do monitor)
     painel_port: int = Field(8080, alias="PAINEL_PORT")

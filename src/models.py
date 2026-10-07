@@ -51,7 +51,20 @@ class WhatsAppGroup(BaseModel):
     default_membership_approval_mode: Optional[bool] = None  # DefaultMembershipApprovalMode
     is_incognito: Optional[bool] = None  # IsIncognito
     linked_parent_jid: Optional[str] = None  # LinkedParentJID para grupos de comunidade
-    
+
+    # Até quando o convite está restrito pelo WhatsApp. O grupo continua ativo
+    # (os membros seguem recebendo oferta), só não recebe gente nova: as
+    # landings pulam o grupo e o monitor abre o próximo da cadeia.
+    convite_restrito_ate: Optional[datetime] = None
+
+    def convite_restrito(self, agora: datetime) -> bool:
+        ate = self.convite_restrito_ate
+        if ate is None:
+            return False
+        if ate.tzinfo is None:
+            ate = ate.replace(tzinfo=agora.tzinfo)
+        return ate > agora
+
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

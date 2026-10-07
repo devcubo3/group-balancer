@@ -57,6 +57,9 @@ def monitor():
     # Rastreio de membros desligado: estes testes são sobre a decisão de criar
     # grupo, e o roster não participa dela.
     m.rastreador = MagicMock(disponivel=False)
+    # Um grupo ativo com convite normal: sem isso o failover de convite
+    # restrito leria o MagicMock como "nenhuma porta disponível".
+    m.load_balancer.db.get_active_groups.return_value = [grupo()]
     return m
 
 
@@ -212,3 +215,36 @@ def test_ciclo_normal_nao_cria_nada_e_loga(monitor):
     log = log_salvo(monitor)
     assert log.has_error is False
     assert log.member_count == 47
+
+
+
+# --- failover de convite restrito (PromoBaby #001, 07/10) ------------------
+
+
+def test_convite_restrito_abre_o_proximo_grupo(monitor):
+    restrito = grupo(membros=415)
+    restrito.convite_restrito_ate = datetime.now(timezone.utc) + timedelta(days=6)
+    monitor.load_balancer.db.get_newest_group.return_value = restrito
+    monitor.load_balancer.db.get_active_groups.return_value = [restrito]
+    monitor.load_balancer.should_scale_out.return_value = False
+    monitor.load_balancer.db.get_nicho_group_stats.return_value = stats(max_numero=23, idade_minutos=None)
+    monitor.load_balancer.create_new_group.return_value = grupo(nome="Caramelo Ofertas #024", membros=1)
+
+    monitor._check_nicho(NICHO_GERAL)
+
+    kwargs = monitor.load_balancer.create_new_group.call_args.kwargs
+    assert kwargs["group_name"] == "Caramelo Ofertas #024"
+    assert log_salvo(monitor).new_group_created is True
+
+
+def test_failover_respeita_o_cooldown(monitor):
+    restrito = grupo(membros=415)
+    restrito.convite_restrito_ate = datetime.now(timezone.utc) + timedelta(days=6)
+    monitor.load_balancer.db.get_newest_group.return_value = restrito
+    monitor.load_balancer.db.get_active_groups.return_value = [restrito]
+    monitor.load_balancer.should_scale_out.return_value = False
+    monitor.load_balancer.db.get_nicho_group_stats.return_value = stats(idade_minutos=10)
+
+    monitor._check_nicho(NICHO_GERAL)
+
+    monitor.load_balancer.create_new_group.assert_not_called()

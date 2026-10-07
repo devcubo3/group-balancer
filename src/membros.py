@@ -190,6 +190,17 @@ def atribuir_entradas(
     return resultado
 
 
+def funil_morto(cliques: int, entradas: int, minimo: int) -> bool:
+    """
+    True quando o grupo recebe tráfego e não converte NINGUÉM.
+
+    Zero entradas, e não "poucas": criativo ruim derruba a taxa, link restrito
+    zera. Com o volume atual, `minimo` cliques sem uma única entrada não
+    acontece por acaso — em 05/10 cada clique virava entrada em menos de 1 min.
+    """
+    return cliques >= minimo and entradas == 0
+
+
 def permanencia_em_minutos(entrou_em: Optional[datetime], agora: datetime) -> Optional[int]:
     """Minutos entre a entrada e a saída. None quando a entrada é desconhecida."""
     if not entrou_em:
@@ -302,6 +313,28 @@ class RepositorioMembros:
             .execute()
         )
         return resposta.data or []
+
+    def contar_funil(self, grupo_id: str, group_jid: str, desde: datetime) -> Tuple[int, int]:
+        """(cliques, entradas) do grupo desde `desde`. Clique consumido ou não:
+        aqui importa se o tráfego chegou, não a quem foi atribuído."""
+        cliques = (
+            self.client.table("cliques_anuncio")
+            .select("id", count="exact")
+            .eq("group_jid", group_jid)
+            .gte("criado_em", desde.isoformat())
+            .limit(1)
+            .execute()
+        )
+        entradas = (
+            self.client.table("grupo_eventos")
+            .select("id", count="exact")
+            .eq("grupo_id", grupo_id)
+            .eq("tipo", "entrada")
+            .gte("ocorrido_em", desde.isoformat())
+            .limit(1)
+            .execute()
+        )
+        return cliques.count or 0, entradas.count or 0
 
     def consumir_clique(self, clique_id: str, agora: datetime) -> None:
         self.client.table("cliques_anuncio").update(

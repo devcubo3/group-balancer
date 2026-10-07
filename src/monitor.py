@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
 from .config import settings
-from .load_balancer import LoadBalancer
-from .membros import RastreadorMembros
+from .load_balancer import LoadBalancer, sem_convite_disponivel
+from .membros import RastreadorMembros, funil_morto
 from .models import MonitorLog, WhatsAppGroup
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,8 @@ class GroupMonitor:
         # Sem SUPABASE_SERVICE_KEY ele nasce indisponível e todo o resto segue
         # exatamente como antes (ver src/membros.py).
         self.rastreador = RastreadorMembros()
+        # grupo_id -> quando o último alerta de funil morto foi gravado
+        self._funil_alertas: dict = {}
 
     def check_newest_group(self):
         """
@@ -213,6 +215,26 @@ class GroupMonitor:
 
                 novo, status_message, error_msg = self._criar_grupo_do_nicho(
                     nicho, motivo="scale-out"
+                )
+                new_group_created = novo is not None
+                new_group_id = novo.group_id_api if novo else None
+                error_occurred = error_msg is not None
+
+            elif sem_convite_disponivel(
+                self.load_balancer.db.get_active_groups(nicho.id),
+                datetime.now(timezone.utc),
+                settings.max_members_for_redirect,
+            ):
+                # Failover: todo grupo do nicho está com o convite restrito (ou
+                # cheio). O grupo restrito continua ativo — os membros dele
+                # seguem recebendo oferta —, mas o lead novo precisa de outra
+                # porta. O cooldown de criação continua valendo.
+                logger.warning(
+                    f"🚫 FAILOVER: nenhum convite disponível em {nicho.slug} "
+                    f"(mais novo: {newest_group.name}) — abrindo o próximo grupo"
+                )
+                novo, status_message, error_msg = self._criar_grupo_do_nicho(
+                    nicho, motivo="convite restrito"
                 )
                 new_group_created = novo is not None
                 new_group_id = novo.group_id_api if novo else None
@@ -478,6 +500,76 @@ class GroupMonitor:
 
             if indice < len(pendentes):
                 self.load_balancer.whatsapp.wait_rate_limit()
+
+        # Depois do roster, para as entradas deste ciclo já estarem gravadas.
+        self.check_funis(pendentes)
+
+    def check_funis(self, grupos):
+        """
+        Alerta de link de convite restrito: cliques chegando, zero entradas.
+
+        O WhatsApp não avisa quando restringe um convite — quem clica vê "link
+        indisponível" e a API segue respondendo normal. O único rastro é o
+        funil: `cliques_anuncio` continua crescendo e `grupo_eventos` para.
+
+        Não tenta resetar o link: a restrição de 06/10 bloqueou até a geração
+        de link novo pelo celular. Em vez disso marca `convite_restrito_ate`
+        (FUNIL_BLOQUEIO_DIAS), o que tira o grupo das landings e faz o próximo
+        `_check_nicho` abrir o grupo seguinte da cadeia (failover). O erro vai
+        para monitor_logs como 'funil_convite', repetido no máximo 1x/hora
+        enquanto durar, e a volta ao normal também é registrada — é o que
+        painel_saude_monitor lê.
+
+        Grupo já marcado é pulado: a landing não manda mais clique para ele, e
+        sem clique não há o que medir.
+        """
+        agora = datetime.now(timezone.utc)
+        desde = agora - timedelta(hours=settings.funil_janela_horas)
+        repo = self.rastreador.repo
+
+        for grupo in grupos:
+            if grupo.convite_restrito(agora):
+                continue
+            try:
+                cliques, entradas = repo.contar_funil(grupo.id, grupo.group_id_api, desde)
+            except Exception as e:
+                logger.error(f"✗ Funil de {grupo.name} não pôde ser lido: {e}")
+                continue
+
+            ultimo_alerta = self._funil_alertas.get(grupo.id)
+
+            if funil_morto(cliques, entradas, settings.funil_cliques_minimo):
+                if ultimo_alerta and agora - ultimo_alerta < timedelta(hours=1):
+                    continue
+                msg = (f"{cliques} cliques e 0 entradas em {settings.funil_janela_horas}h — "
+                       f"link de convite provavelmente restrito: {grupo.invite_link}")
+                logger.error(f"🚫 {grupo.name}: {msg}")
+                self._funil_alertas[grupo.id] = agora
+                ate = agora + timedelta(days=settings.funil_bloqueio_dias)
+                try:
+                    self.load_balancer.db.marcar_convite_restrito(grupo.id, ate)
+                    msg += f" — fora das landings até {ate:%d/%m %H:%M} UTC"
+                except Exception as e:
+                    msg += f" — FALHA ao marcar como restrito: {e}"
+                self.load_balancer.db.save_monitor_log(MonitorLog(
+                    monitor_type="funil_convite",
+                    group_id_api=grupo.group_id_api,
+                    group_name=grupo.name,
+                    member_count=grupo.member_count,
+                    status_message=msg,
+                    has_error=True,
+                    error_message=msg,
+                ))
+            elif ultimo_alerta and entradas > 0:
+                logger.info(f"✅ {grupo.name}: funil voltou ({entradas} entradas em {cliques} cliques)")
+                del self._funil_alertas[grupo.id]
+                self.load_balancer.db.save_monitor_log(MonitorLog(
+                    monitor_type="funil_convite",
+                    group_id_api=grupo.group_id_api,
+                    group_name=grupo.name,
+                    member_count=grupo.member_count,
+                    status_message=f"funil normalizado: {entradas} entradas em {cliques} cliques",
+                ))
 
     def run_continuous(self):
         """

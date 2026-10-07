@@ -2,7 +2,8 @@
 Algoritmo de Load Balancer e Auto-Scaling para grupos de WhatsApp.
 """
 import logging
-from typing import Optional
+from datetime import datetime
+from typing import List, Optional
 
 from .config import settings
 from .supabase_client import SupabaseClient
@@ -10,6 +11,23 @@ from .whatsapp_service import WhatsAppService
 from .models import WhatsAppGroup, LoadBalancerResult, Nicho
 
 logger = logging.getLogger(__name__)
+
+
+def sem_convite_disponivel(grupos: List[WhatsAppGroup], agora: datetime, max_membros: int) -> bool:
+    """
+    True quando nenhum grupo ativo do nicho pode receber lead novo: todos estão
+    com o convite restrito ou cheios. É o gatilho do failover — a landing não
+    tem para onde mandar ninguém.
+
+    Nicho sem grupo nenhum devolve False de propósito: esse caso tem caminho
+    próprio no monitor ('nicho sem grupo'), com a dupla confirmação.
+    """
+    if not grupos:
+        return False
+    return not any(
+        not g.convite_restrito(agora) and g.member_count < max_membros
+        for g in grupos
+    )
 
 
 class LoadBalancer:
