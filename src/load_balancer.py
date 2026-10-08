@@ -264,6 +264,9 @@ class LoadBalancer:
             success = self.db.update_member_count(group.group_id_api, current_count)
 
             if success:
+                # Quem chamou passa a enxergar a contagem nova sem reler o banco
+                # (check_rosters grava a amostra do painel a partir dela).
+                group.member_count = current_count
                 # Verifica se precisa escalar
                 if current_count >= self.scale_threshold:
                     logger.warning(

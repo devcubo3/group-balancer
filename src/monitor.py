@@ -476,6 +476,12 @@ class GroupMonitor:
         espaçadas pelo mesmo rate limit da sincronização diária. O grupo mais
         novo entra de novo nessa varredura: distingui-lo custaria uma consulta
         por nicho, e reler o roster dele é um diff vazio.
+
+        Cada leitura bem-sucedida vira uma amostra 'roster' em monitor_logs, que
+        painel_fluxo_diario lê junto com 'newest_group'. Sem ela, o grupo que
+        deixa de ser o mais novo some do fluxo: foi o que congelou o PromoBaby
+        #001 em 415 quando o failover de 07/10 abriu o Mãe Inteligente #002.
+        Falha de leitura não grava nada — buraco na série, nunca valor inventado.
         """
         if not self.rastreador.disponivel:
             return
@@ -494,7 +500,14 @@ class GroupMonitor:
 
         for indice, grupo in enumerate(pendentes, 1):
             try:
-                self.load_balancer.sync_group_members(grupo, rastreador=self.rastreador)
+                if self.load_balancer.sync_group_members(grupo, rastreador=self.rastreador):
+                    self.load_balancer.db.save_monitor_log(MonitorLog(
+                        monitor_type="roster",
+                        group_id_api=grupo.group_id_api,
+                        group_name=grupo.name,
+                        member_count=grupo.member_count,
+                        status_message=f"Roster: {grupo.member_count} membros",
+                    ))
             except Exception as e:
                 logger.error(f"✗ Roster de {grupo.name} falhou: {e}")
 

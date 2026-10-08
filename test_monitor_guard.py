@@ -248,3 +248,42 @@ def test_failover_respeita_o_cooldown(monitor):
     monitor._check_nicho(NICHO_GERAL)
 
     monitor.load_balancer.create_new_group.assert_not_called()
+
+
+# --- amostra de todos os grupos (PromoBaby #001 congelado em 415, 07/10) ----
+
+
+def grupo_antigo(monitor):
+    antigo = grupo(nome="PromoBaby #001", membros=415)
+    antigo.id = "f4a11cd1"
+    monitor.rastreador = MagicMock(disponivel=True)
+    monitor.check_funis = MagicMock()
+    monitor.load_balancer.db.get_active_groups.return_value = [antigo]
+    return antigo
+
+
+def test_roster_grava_amostra_de_cada_grupo(monitor):
+    """O grupo que deixou de ser o mais novo continua na série do painel."""
+    antigo = grupo_antigo(monitor)
+
+    def sync(g, rastreador=None):
+        g.member_count = 410
+        return True
+
+    monitor.load_balancer.sync_group_members.side_effect = sync
+
+    monitor.check_rosters()
+
+    log = log_salvo(monitor)
+    assert log.monitor_type == "roster"
+    assert log.group_id_api == antigo.group_id_api
+    assert log.member_count == 410
+
+
+def test_roster_com_falha_de_leitura_nao_grava_amostra(monitor):
+    grupo_antigo(monitor)
+    monitor.load_balancer.sync_group_members.return_value = False
+
+    monitor.check_rosters()
+
+    monitor.load_balancer.db.save_monitor_log.assert_not_called()

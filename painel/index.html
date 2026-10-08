@@ -925,7 +925,7 @@
       // Um dia so nao e uma serie temporal: um grafico com uma barra unica nao
       // diz nada que quatro numeros nao digam melhor.
       if (umDia()) {
-        card.appendChild(resumoDoDia(linhas[0], de === hojeISO()));
+        card.appendChild(resumoDoDia(linhas[0], de === hojeISO(), g.membros_atuais));
         return;
       }
 
@@ -949,9 +949,12 @@
     });
   }
 
-  function resumoDoDia(d, ehHoje) {
+  function resumoDoDia(d, ehHoje, membrosAgora) {
     var el = document.createElement("div");
     el.className = "resumo-dia";
+    // Hoje, "agora" e a contagem viva (a mesma do medidor), nao a ultima amostra
+    // da serie: um buraco na serie congelou o PromoBaby #001 em 415 em 07/10.
+    var membros = ehHoje && membrosAgora != null ? membrosAgora : d.membros_fim_do_dia;
     function bloco(rotulo, valor, classe) {
       return '<div><span class="eyebrow">' + rotulo + '</span>' +
              '<span class="v ' + classe + '">' + valor + "</span></div>";
@@ -962,7 +965,8 @@
     if (d.semDados) {
       el.innerHTML =
         bloco("Entradas", "\u2013", "flat") + bloco("Sa\u00eddas", "\u2013", "flat") +
-        bloco("Saldo", "\u2013", "flat") + bloco(rotuloMembros, "\u2013", "flat") +
+        bloco("Saldo", "\u2013", "flat") +
+        bloco(rotuloMembros, ehHoje && membrosAgora != null ? membrosAgora : "\u2013", "flat") +
         '<p class="nota">Sem registro do monitor neste dia para este grupo.</p>';
       return el;
     }
@@ -972,7 +976,7 @@
       bloco("Entradas", d.entradas ? "+" + d.entradas : "0", d.entradas ? "up" : "flat") +
       bloco("Sa\u00eddas", d.saidas ? "\u2212" + d.saidas : "0", d.saidas ? "down" : "flat") +
       bloco("Saldo", saldo, d.saldo > 0 ? "up" : d.saldo < 0 ? "down" : "flat") +
-      bloco(rotuloMembros, d.membros_fim_do_dia, "flat");
+      bloco(rotuloMembros, membros, "flat");
     return el;
   }
 
